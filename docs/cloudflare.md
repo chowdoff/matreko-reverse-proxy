@@ -12,6 +12,8 @@ Cloudflare 控制台 → 右上角头像 → **My Profile** → **API Tokens** �
 | Client IP Address Filtering | （可选）填服务器公网 IP，进一步限制 Token 使用来源 |
 
 > 不要使用 Global API Key。该 Token 同时用于 Caddy 申请证书和 `rpctl dns sync`。
+>
+> 注意权限列表里有两个名字很像的项：要选 **`DNS`**，不是 `DNS Settings`。选错时 `dns verify` 前两步能通过，但读取 DNS 记录会报 `10000 Authentication error`。也可以直接用模板 **Edit zone DNS** 创建，再额外添加 `Zone / Zone / Read`。
 
 把生成的 Token 写入 `.env`：
 
@@ -74,5 +76,6 @@ Cloudflare 控制台 → 你的域名 → **SSL/TLS**：
 
 - **证书申请失败 `timed out waiting for record to fully propagate`**：Caddyfile 已指定用 1.1.1.1 检查传播；若服务器访问 1.1.1.1 受限，改成服务器可用的公共 DNS
 - **`API token ... appears invalid`**：Token 复制不完整，或 `.env` 中加了引号/空格
+- **读取 `dns_records` 报 `10000 Authentication error`**：Token 缺少 `Zone / DNS / Edit` 权限，或 Zone Resources 没包含该域名。在 API Tokens 页面编辑该 Token 补上权限即可，Token 值不变，无需改 `.env`
 - **`找不到 Zone`**：`CF_ZONE` 填写错误，或 Token 未授予 `Zone:Read`
 - **浏览器 526 错误**：SSL 模式为 Full (strict) 但 Caddy 证书尚未签发成功，查看 `./rpctl logs proxy`

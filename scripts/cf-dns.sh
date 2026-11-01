@@ -22,7 +22,12 @@ cf_api() {
   [[ -n "$body" ]] && args+=(--data "$body")
   resp="$(curl "${args[@]}" "$CF_API$path")" || die "请求 Cloudflare API 失败：$method $path"
   if [[ "$(jq -r '.success' <<<"$resp")" != "true" ]]; then
-    die "Cloudflare API 错误（$method $path）：$(jq -c '.errors' <<<"$resp")"
+    err "Cloudflare API 错误（$method $path）：$(jq -c '.errors' <<<"$resp")"
+    if [[ "$path" == *dns_records* ]] && jq -e '.errors[]? | select(.code == 10000)' <<<"$resp" >/dev/null; then
+      err "提示：Token 缺少 DNS 权限。请在 Cloudflare 编辑该 Token，添加 Zone → DNS → Edit（注意不是“DNS Settings”），"
+      err "      并确认 Zone Resources 包含 $CF_ZONE，见 docs/cloudflare.md"
+    fi
+    exit 1
   fi
   printf '%s' "$resp"
 }
@@ -42,7 +47,11 @@ cmd_verify() {
   local status
   status="$(cf_api GET "/user/tokens/verify" | jq -r '.result.status')"
   ok "Token 有效，状态：$status"
-  ok "Zone $CF_ZONE 的 ID：$(zone_id)"
+  local zid
+  zid="$(zone_id)"
+  ok "Zone $CF_ZONE 的 ID：$zid"
+  cf_api GET "/zones/$zid/dns_records?per_page=1" >/dev/null
+  ok "Token 可读取 $CF_ZONE 的 DNS 记录（编辑权限会在 dns sync / 申请证书时验证）"
 }
 
 cmd_list() {
