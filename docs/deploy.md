@@ -29,13 +29,24 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 ./rpctl dns sync    # 创建 DNS 记录（或在 CF 控制台手动添加）
 
 ./rpctl init        # 生成各服务配置（会打印 Web SSH 口令，请妥善保存）
-./rpctl build       # 构建 Caddy 镜像
+./rpctl image load  # 从仓库导入预构建的 Caddy 镜像（无需在服务器上构建）
 ./rpctl check
 ./rpctl up
 ./rpctl logs proxy -f   # 观察证书申请，出现 "certificate obtained successfully" 即成功
 ```
 
-> 国内服务器构建镜像拉取 Go 模块慢时，可在 `.env` 中加 `GOPROXY=https://goproxy.cn,direct`。
+### Caddy 镜像的分发方式
+
+自定义 Caddy 镜像需要编译 Go 代码，在国内服务器上拉取基础镜像和 Go 依赖可能要半小时以上。因此镜像在**开发机上构建**，导出为 `images/caddy-cloudflare.tar.gz`（约 40MB）随仓库分发，服务器 `git pull` 后导入即可：
+
+| 文件 | 说明 |
+| --- | --- |
+| `images/caddy-cloudflare.tar.gz` | `docker save` 导出的镜像（linux/amd64） |
+| `images/caddy-cloudflare.info` | Caddy 版本、插件版本、构建时间、sha256，`image load` 时会校验 |
+
+- 服务器上 `./rpctl up` 发现本地没有镜像时，会自动执行 `image load`
+- 仓库只保留最新一份镜像文件，但每次更新都会在 git 历史中增加约 40MB，只在升级 Caddy / 插件时更新
+- 服务器若不是 x86_64，需在服务器上 `./rpctl build`（国内可在 `.env` 中加 `GOPROXY=https://goproxy.cn,direct` 加速）
 
 然后按 [cloudflare.md](cloudflare.md#3-ssltls-设置开启代理时) 把 SSL 模式设为 Full (strict)。
 
@@ -62,10 +73,20 @@ git pull
 ./rpctl up            # 改了 compose 时（只会重建有变化的容器）
 ```
 
-升级镜像：
+升级 Caddy（修改 `proxy/Dockerfile` 中的 `CADDY_VERSION`）：
 
 ```bash
-./rpctl build && ./rpctl up proxy     # Caddy（修改 proxy/Dockerfile 中 CADDY_VERSION）
+# 开发机
+./rpctl build && ./rpctl image save
+git add proxy/Dockerfile images/ && git commit -m "升级 Caddy 到 vX.Y.Z" && git push
+
+# 服务器
+git pull && ./rpctl image load && ./rpctl up proxy
+```
+
+升级其他服务镜像：
+
+```bash
 ./rpctl pull webssh && ./rpctl up webssh
 ```
 

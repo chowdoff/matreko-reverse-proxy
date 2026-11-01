@@ -8,6 +8,9 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$ROOT/scripts/lib/common.sh"
 
 CADDY_IMAGE="matreko/caddy-cloudflare:local"
+# 预构建镜像随仓库分发：开发机 image save 生成，服务器 image load 导入，免去服务器上漫长的构建
+IMAGE_TAR="$ROOT/images/caddy-cloudflare.tar.gz"
+IMAGE_INFO="$ROOT/images/caddy-cloudflare.info"
 
 usage() {
   cat <<EOF
@@ -18,7 +21,9 @@ usage() {
   check                检查 .env 必填项、compose 文件、Caddyfile 语法
 
 生命周期（不指定目标时 = proxy + 全部服务）
-  build                构建自定义 Caddy 镜像（含 Cloudflare 插件）
+  build                构建自定义 Caddy 镜像（含 Cloudflare 插件，较慢）
+  image save           [开发机] 把 Caddy 镜像导出到 images/，提交后随仓库分发
+  image load           [服务器] 从 images/ 导入 Caddy 镜像（git pull 到新镜像后执行）
   up      [目标...]    启动
   down    [目标...]    停止并删除容器（数据卷保留）
   restart [目标...]    重启
@@ -70,8 +75,14 @@ cmd_init() {
   if [[ "${CADDY_TLS_MODE:-cloudflare}" == cloudflare ]]; then
     info "生产模式：如尚未完成，请先执行 ./rpctl dns verify && ./rpctl dns sync（见 docs/deploy.md）"
   fi
-  # 先 build：check 需要用 Caddy 镜像校验 Caddyfile
-  info "下一步：./rpctl build && ./rpctl check && ./rpctl up"
+  # 先准备镜像：check 需要用 Caddy 镜像校验 Caddyfile
+  if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
+    info "下一步：./rpctl check && ./rpctl up"
+  elif [[ -f "$IMAGE_TAR" ]]; then
+    info "下一步：./rpctl image load && ./rpctl check && ./rpctl up"
+  else
+    info "下一步：./rpctl build && ./rpctl check && ./rpctl up"
+  fi
 }
 
 cmd_check() {
@@ -108,15 +119,55 @@ cmd_check() {
       failed=1
     fi
   else
-    warn "Caddy 镜像尚未构建，跳过 Caddyfile 校验（先运行 ./rpctl build）"
+    warn "Caddy 镜像不存在，跳过 Caddyfile 校验（先运行 ./rpctl image load 或 ./rpctl build）"
   fi
 
   [[ $failed -eq 0 ]] && ok "检查通过" || die "检查未通过"
 }
 
+cmd_image() {
+  case "${1:-}" in
+    save)
+      docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1 || die "本地没有 $CADDY_IMAGE，请先 ./rpctl build"
+      mkdir -p "$ROOT/images"
+      info "导出 $CADDY_IMAGE → $(relpath "$IMAGE_TAR")"
+      docker save "$CADDY_IMAGE" | gzip -9 >"$IMAGE_TAR.tmp"
+      mv "$IMAGE_TAR.tmp" "$IMAGE_TAR"
+      {
+        echo "image=$CADDY_IMAGE"
+        echo "caddy=$(docker run --rm "$CADDY_IMAGE" caddy version | awk '{print $1}')"
+        echo "arch=$(docker image inspect "$CADDY_IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+        echo "plugins=$(docker run --rm "$CADDY_IMAGE" caddy build-info 2>/dev/null |
+          awk '$1 == "dep" && $2 ~ /caddy-dns\/cloudflare|caddy-cloudflare-ip/ {printf "%s%s@%s", sep, $2, $3; sep=" "}')"
+        echo "built=$(docker image inspect "$CADDY_IMAGE" --format '{{.Created}}')"
+        echo "sha256=$(sha256sum "$IMAGE_TAR" | awk '{print $1}')"
+      } >"$IMAGE_INFO"
+      ok "已导出（$(du -h "$IMAGE_TAR" | awk '{print $1}')），提交 images/ 并推送后，服务器 git pull && ./rpctl image load"
+      cat "$IMAGE_INFO"
+      ;;
+    load)
+      [[ -f "$IMAGE_TAR" ]] || die "未找到 $(relpath "$IMAGE_TAR")"
+      if [[ -f "$IMAGE_INFO" ]]; then
+        local want
+        want="$(sed -n 's/^sha256=//p' "$IMAGE_INFO")"
+        [[ "$(sha256sum "$IMAGE_TAR" | awk '{print $1}')" == "$want" ]] || die "镜像文件校验失败（sha256 不匹配），请重新 git pull"
+      fi
+      info "从 $(relpath "$IMAGE_TAR") 导入镜像"
+      gunzip -c "$IMAGE_TAR" | docker load
+      ok "导入完成，如 Caddy 正在运行，执行 ./rpctl up proxy 使用新镜像"
+      ;;
+    *) die "用法：./rpctl image {save|load}" ;;
+  esac
+}
+
 cmd_up() {
   load_env
   ensure_network
+  # 没有本地镜像时优先从仓库导入，避免 compose 自动触发漫长的构建
+  if ! docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1 && [[ -f "$IMAGE_TAR" ]] &&
+    targets_or_all "$@" | grep -qx proxy; then
+    cmd_image load
+  fi
   local t
   for t in $(targets_or_all "$@"); do
     info "启动 $t"
@@ -196,6 +247,7 @@ main() {
     init) cmd_init "$@" ;;
     check) cmd_check "$@" ;;
     build) load_env; dc proxy build --pull ;;
+    image) cmd_image "$@" ;;
     up) cmd_up "$@" ;;
     down) cmd_down "$@" ;;
     restart) cmd_restart "$@" ;;

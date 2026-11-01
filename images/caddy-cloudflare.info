@@ -1,0 +1,6 @@
+image=matreko/caddy-cloudflare:local
+caddy=v2.11.7
+arch=linux/amd64
+plugins=github.com/WeidiDeng/caddy-cloudflare-ip@v0.0.0-20231130002422-f53b62aa13cb github.com/caddy-dns/cloudflare@v0.2.4
+built=2026-11-02T00:34:43.274928412+11:00
+sha256=d65176a7aac8c7082367efb6b34d22aeb01c8cb281bd0b84246b51da8735defd

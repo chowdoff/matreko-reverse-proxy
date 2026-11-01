@@ -32,6 +32,7 @@
 ├── scripts/
 │   ├── cf-dns.sh               # Cloudflare DNS 记录同步
 │   └── lib/common.sh           # 公共函数
+├── images/                     # 预构建的 Caddy 镜像（开发机 image save，服务器 image load）
 ├── templates/service/          # 新服务模板
 └── docs/                       # 文档
 ```
@@ -46,7 +47,7 @@
 #   CADDY_TLS_MODE=internal
 #   WEBSSH_DOMAIN=ssh.localhost
 ./rpctl init                    # 生成 webssh 配置，并打印访问口令
-./rpctl build                   # 构建 Caddy 镜像（首次约 3~5 分钟）
+./rpctl image load              # 导入仓库中预构建的 Caddy 镜像（或 ./rpctl build 自行构建）
 ./rpctl check
 ./rpctl up
 ```
@@ -63,7 +64,8 @@
 | --- | --- |
 | `./rpctl init` | 生成 .env、创建 `proxy` 网络、执行各服务 `init.sh`（可重复执行） |
 | `./rpctl check` | 检查 .env 必填项、compose 文件、Caddyfile 语法 |
-| `./rpctl build` | 构建自定义 Caddy 镜像 |
+| `./rpctl build` | 构建自定义 Caddy 镜像（较慢，一般只在开发机执行） |
+| `./rpctl image save` / `image load` | 导出 Caddy 镜像到 `images/` / 从 `images/` 导入 |
 | `./rpctl up [目标...]` | 启动（默认全部） |
 | `./rpctl down [目标...]` | 停止（数据卷保留） |
 | `./rpctl restart [目标...]` | 重启 |
