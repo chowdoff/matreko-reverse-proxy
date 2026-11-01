@@ -66,7 +66,12 @@ cmd_init() {
       ( source "$ROOT/services/$svc/init.sh" )
     fi
   done
-  ok "初始化完成，下一步：./rpctl check && ./rpctl build && ./rpctl up"
+  ok "初始化完成"
+  if [[ "${CADDY_TLS_MODE:-cloudflare}" == cloudflare ]]; then
+    info "生产模式：如尚未完成，请先执行 ./rpctl dns verify && ./rpctl dns sync（见 docs/deploy.md）"
+  fi
+  # 先 build：check 需要用 Caddy 镜像校验 Caddyfile
+  info "下一步：./rpctl build && ./rpctl check && ./rpctl up"
 }
 
 cmd_check() {
