@@ -1,0 +1,8 @@
+# Web SSH（Sshwifty）
+# 后端：services/webssh，容器名 sshwifty，监听 8182，仅加入 proxy 网络，不对外暴露端口
+# WebSocket 由 reverse_proxy 自动处理，无需额外配置
+{$WEBSSH_DOMAIN} {
+	import common
+
+	reverse_proxy sshwifty:8182
+}

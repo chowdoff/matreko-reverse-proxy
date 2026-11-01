@@ -1,0 +1,6 @@
+# CHANGEME 服务：移动到 proxy/sites/<name>.caddy，并在 .env 中添加 CHANGEME_DOMAIN
+{$CHANGEME_DOMAIN} {
+	import common
+
+	reverse_proxy CHANGEME:PORT
+}

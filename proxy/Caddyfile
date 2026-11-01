@@ -1,0 +1,58 @@
+# =============================================================
+# Caddy 全局配置
+#   - 每个站点一个文件，放在 sites/*.caddy，由末尾的 import 自动加载
+#   - {$VAR} 在解析时由环境变量替换（来自项目根目录 .env）
+#   - 修改后执行 ./rpctl reload 热加载，无需重启
+# =============================================================
+{
+	email {$ACME_EMAIL}
+
+	servers {
+		# 信任 Cloudflare 回源 IP 段（插件每 12 小时自动刷新），
+		# 只有来自这些 IP 的 CF-Connecting-IP 才会被当作真实客户端 IP
+		trusted_proxies cloudflare {
+			interval 12h
+			timeout 15s
+		}
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+}
+
+# ---------- TLS 模式片段（由 CADDY_TLS_MODE 选择） ----------
+
+# 生产：Cloudflare DNS-01 申请正式证书
+(tls_cloudflare) {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		# 用公共 DNS 检查 TXT 记录传播，避免内网/运营商 DNS 缓存导致验证超时
+		resolvers 1.1.1.1 1.0.0.1
+	}
+}
+
+# 开发：Caddy 本地 CA 自签证书
+(tls_internal) {
+	tls internal
+}
+
+# ---------- 所有站点通用配置 ----------
+(common) {
+	import tls_{$CADDY_TLS_MODE:cloudflare}
+
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# ---------- 加载各站点 ----------
+import sites/*.caddy

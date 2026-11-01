@@ -1,0 +1,33 @@
+# Web SSH：Sshwifty
+# 通过 ./rpctl up webssh 启动；配置文件由 ./rpctl init 从 sshwifty.conf.example.json 生成
+name: rp-webssh
+
+services:
+  sshwifty:
+    image: ${SSHWIFTY_IMAGE:-niruix/sshwifty:latest}
+    container_name: sshwifty
+    restart: unless-stopped
+    # 以部署用户的 UID/GID 运行，使其能读取 600 权限的配置文件（rpctl 自动传入）
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      SSHWIFTY_CONFIG: /etc/sshwifty/sshwifty.conf.json
+    volumes:
+      - ./sshwifty.conf.json:/etc/sshwifty/sshwifty.conf.json:ro
+    # 让容器能通过 host.docker.internal 连到宿主机自身的 sshd
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - proxy
+    # 不映射端口：只能经由 Caddy 访问
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    name: proxy
+    external: true

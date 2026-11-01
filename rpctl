@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# rpctl —— matreko-reverse-proxy 管理入口
+# 运行 ./rpctl help 查看用法
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=scripts/lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
+
+CADDY_IMAGE="matreko/caddy-cloudflare:local"
+
+usage() {
+  cat <<EOF
+用法：./rpctl <命令> [参数]
+
+初始化与检查
+  init                 生成 .env、创建 proxy 网络、执行各服务 init.sh（可重复执行）
+  check                检查 .env 必填项、compose 文件、Caddyfile 语法
+
+生命周期（不指定目标时 = proxy + 全部服务）
+  build                构建自定义 Caddy 镜像（含 Cloudflare 插件）
+  up      [目标...]    启动
+  down    [目标...]    停止并删除容器（数据卷保留）
+  restart [目标...]    重启
+  pull    [目标...]    拉取最新镜像
+  ps                   查看所有相关容器状态
+  logs    <目标> [-f]  查看日志
+  reload               热加载 Caddy 配置（修改 Caddyfile / sites 后使用）
+  compose <目标> ...   透传 docker compose 命令，例如 ./rpctl compose webssh exec sshwifty sh
+
+Cloudflare
+  dns verify           校验 CF_API_TOKEN
+  dns list             列出各 *_DOMAIN 的 DNS 记录
+  dns sync [--dry-run] 把各 *_DOMAIN 指向 SERVER_IPV4/SERVER_IPV6
+
+运维
+  backup               备份 Caddy 证书数据卷与各服务配置到 backups/
+
+目标：proxy（Caddy）或 services/ 下的服务名：$(list_services | tr '\n' ' ')
+EOF
+}
+
+# 解析目标列表；为空时返回全部（proxy 放在最后启动 / 最先停止由调用方决定）
+targets_or_all() {
+  if [[ $# -gt 0 ]]; then printf '%s\n' "$@"; else list_services; echo proxy; fi
+}
+
+cmd_init() {
+  require_cmd docker jq curl
+  docker compose version >/dev/null 2>&1 || die "需要 Docker Compose v2（docker compose）"
+
+  if [[ ! -f "$ROOT/.env" ]]; then
+    cp "$ROOT/.env.example" "$ROOT/.env"
+    chmod 600 "$ROOT/.env"
+    ok "已从 .env.example 生成 .env —— 请编辑其中的域名、Cloudflare Token 后重新运行 ./rpctl init"
+    exit 0
+  fi
+  chmod 600 "$ROOT/.env"
+  load_env
+  ensure_network
+
+  local svc
+  for svc in $(list_services); do
+    if [[ -f "$ROOT/services/$svc/init.sh" ]]; then
+      # 在子 shell 中执行，共享已加载的环境变量和公共函数
+      ( source "$ROOT/services/$svc/init.sh" )
+    fi
+  done
+  ok "初始化完成，下一步：./rpctl check && ./rpctl build && ./rpctl up"
+}
+
+cmd_check() {
+  load_env
+  local failed=0 var
+
+  [[ -n "${ACME_EMAIL:-}" ]] || { err "ACME_EMAIL 未设置"; failed=1; }
+  case "${CADDY_TLS_MODE:-cloudflare}" in
+    cloudflare) [[ -n "${CF_API_TOKEN:-}" ]] || { err "CADDY_TLS_MODE=cloudflare 但 CF_API_TOKEN 为空"; failed=1; } ;;
+    internal) warn "CADDY_TLS_MODE=internal：使用自签证书，仅适合开发环境" ;;
+    *) err "CADDY_TLS_MODE 只能是 cloudflare 或 internal"; failed=1 ;;
+  esac
+  for var in $(domain_vars); do
+    [[ -n "${!var:-}" ]] || { err "$var 为空"; failed=1; }
+  done
+
+  local t
+  for t in proxy $(list_services); do
+    if dc "$t" config -q 2>/dev/null; then ok "compose 配置有效：$t"; else err "compose 配置无效：$t"; dc "$t" config -q || true; failed=1; fi
+  done
+
+  if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
+    if docker run --rm --env-file "$ROOT/.env" \
+      -v "$ROOT/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+      -v "$ROOT/proxy/sites:/etc/caddy/sites:ro" \
+      "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+      ok "Caddyfile 校验通过"
+    else
+      err "Caddyfile 校验失败："
+      docker run --rm --env-file "$ROOT/.env" \
+        -v "$ROOT/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "$ROOT/proxy/sites:/etc/caddy/sites:ro" \
+        "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -5 || true
+      failed=1
+    fi
+  else
+    warn "Caddy 镜像尚未构建，跳过 Caddyfile 校验（先运行 ./rpctl build）"
+  fi
+
+  [[ $failed -eq 0 ]] && ok "检查通过" || die "检查未通过"
+}
+
+cmd_up() {
+  load_env
+  ensure_network
+  local t
+  for t in $(targets_or_all "$@"); do
+    info "启动 $t"
+    dc "$t" up -d
+  done
+}
+
+cmd_down() {
+  load_env
+  local t
+  # proxy 在列表最后，反转后最先停止
+  for t in $(targets_or_all "$@" | tac); do
+    info "停止 $t"
+    dc "$t" down
+  done
+}
+
+cmd_restart() {
+  load_env
+  local t
+  for t in $(targets_or_all "$@"); do
+    info "重启 $t"
+    dc "$t" restart
+  done
+}
+
+cmd_pull() {
+  load_env
+  local t
+  for t in $(targets_or_all "$@"); do
+    if [[ "$t" == proxy ]]; then
+      info "proxy 为本地构建镜像，使用 ./rpctl build 更新"
+      continue
+    fi
+    dc "$t" pull
+  done
+}
+
+cmd_ps() {
+  docker ps -a --filter "network=proxy" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+}
+
+cmd_logs() {
+  [[ $# -ge 1 ]] || die "用法：./rpctl logs <目标> [-f]"
+  load_env
+  local t="$1"; shift
+  dc "$t" logs --tail 200 "$@"
+}
+
+cmd_reload() {
+  docker exec -w /etc/caddy caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+  ok "Caddy 配置已热加载"
+}
+
+cmd_backup() {
+  load_env
+  local ts dest
+  ts="$(date +%Y%m%d-%H%M%S)"
+  dest="$ROOT/backups/$ts"
+  mkdir -p "$dest"
+  chmod 700 "$ROOT/backups" "$dest"
+
+  info "备份 Caddy 数据卷（证书、ACME 账户）"
+  # 卷内文件属 root，以 root 打包后把归档归还给当前用户（复用 Caddy 镜像，无需额外拉取）
+  docker run --rm -v rp-proxy_caddy_data:/data:ro -v "$dest:/backup" --entrypoint sh "$CADDY_IMAGE" \
+    -c "tar czf /backup/caddy_data.tgz -C /data . && chown $(id -u):$(id -g) /backup/caddy_data.tgz"
+  info "备份 .env 与各服务本地配置"
+  tar czf "$dest/config.tgz" -C "$ROOT" .env $(cd "$ROOT" && git ls-files --others --ignored --exclude-standard services 2>/dev/null || true)
+  chmod 600 "$dest"/*
+  ok "备份完成：$(relpath "$dest")"
+}
+
+main() {
+  local cmd="${1:-help}"
+  [[ $# -gt 0 ]] && shift
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    check) cmd_check "$@" ;;
+    build) load_env; dc proxy build --pull ;;
+    up) cmd_up "$@" ;;
+    down) cmd_down "$@" ;;
+    restart) cmd_restart "$@" ;;
+    pull) cmd_pull "$@" ;;
+    ps | status) cmd_ps ;;
+    logs) cmd_logs "$@" ;;
+    reload) cmd_reload ;;
+    compose) [[ $# -ge 1 ]] || die "用法：./rpctl compose <目标> <compose 参数...>"; load_env; dc "$@" ;;
+    dns) "$ROOT/scripts/cf-dns.sh" "$@" ;;
+    backup) cmd_backup ;;
+    help | -h | --help) usage ;;
+    *) err "未知命令：$cmd"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"

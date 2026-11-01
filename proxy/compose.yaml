@@ -1,0 +1,39 @@
+# Caddy 反向代理核心
+# 通过 ./rpctl 管理（会自动带上 --env-file ../.env 和项目名）
+name: rp-proxy
+
+services:
+  caddy:
+    build:
+      context: .
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    image: matreko/caddy-cloudflare:local
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp" # HTTP/3
+    # 全局 .env 注入容器：Caddyfile 中通过 {$WEBSSH_DOMAIN}、{env.CF_API_TOKEN} 等引用
+    # 新增服务只需在 .env 里加 XXX_DOMAIN，无需改这里
+    env_file:
+      - ../.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro
+      - caddy_data:/data # 证书、ACME 账户 —— 需要备份
+      - caddy_config:/config
+    networks:
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  proxy:
+    name: proxy
+    external: true

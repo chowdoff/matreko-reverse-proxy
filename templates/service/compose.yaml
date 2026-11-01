@@ -1,0 +1,22 @@
+# 新服务模板：复制到 services/<name>/ 后修改，见 docs/adding-a-service.md
+name: rp-CHANGEME
+
+services:
+  CHANGEME:
+    image: CHANGEME:TAG
+    container_name: CHANGEME # Caddy 通过此名称访问
+    restart: unless-stopped
+    # environment:
+    #   TZ: Asia/Shanghai
+    # volumes:
+    #   - ./data:/data
+    networks:
+      - proxy
+    # 不要映射 ports：只经由 Caddy 访问
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    name: proxy
+    external: true
