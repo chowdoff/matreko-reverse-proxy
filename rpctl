@@ -177,6 +177,11 @@ cmd_up() {
     # --remove-orphans：清理 compose 文件中已删除的服务容器（如替换后端时的旧容器）
     dc "$t" up -d --remove-orphans
   done
+  # Caddyfile / sites 是挂载进容器的文件，内容变化不会让 compose 重建容器，
+  # Caddy 会继续使用内存中的旧配置（例如仍指向已删除的后端导致 502），因此每次 up 后热加载一次
+  if [[ "$(docker inspect -f '{{.State.Running}}' caddy 2>/dev/null)" == true ]]; then
+    cmd_reload
+  fi
 }
 
 cmd_down() {
@@ -222,8 +227,14 @@ cmd_logs() {
 }
 
 cmd_reload() {
-  docker exec -w /etc/caddy caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-  ok "Caddy 配置已热加载"
+  local out
+  if out="$(docker exec -w /etc/caddy caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1)"; then
+    ok "Caddy 配置已热加载"
+  else
+    err "Caddy 配置热加载失败，仍在使用旧配置："
+    printf '%s\n' "$out" | tail -5 >&2
+    return 1
+  fi
 }
 
 cmd_backup() {

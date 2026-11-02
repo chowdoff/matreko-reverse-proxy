@@ -70,8 +70,8 @@ cd /opt/matreko-reverse-proxy
 git pull
 ./rpctl init          # 新服务可能需要初始化
 ./rpctl check
-./rpctl reload        # 仅改了 Caddyfile / sites 时
-./rpctl up            # 改了 compose 时（只会重建有变化的容器）
+./rpctl up            # 只重建有变化的容器，并自动热加载 Caddy 配置
+                      # （仅改了 Caddyfile / sites 时也可只执行 ./rpctl reload）
 ```
 
 升级 Caddy（修改 `proxy/Dockerfile` 中的 `CADDY_VERSION`）：
