@@ -28,11 +28,12 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 ./rpctl dns verify  # 校验 Token
 ./rpctl dns sync    # 创建 DNS 记录（或在 CF 控制台手动添加）
 
-./rpctl init        # 生成各服务配置（会打印 Web SSH 口令，请妥善保存）
+./rpctl init        # 创建 proxy 网络、执行各服务初始化
 ./rpctl image load  # 从仓库导入预构建的 Caddy 镜像（无需在服务器上构建）
 ./rpctl check
 ./rpctl up
 ./rpctl logs proxy -f   # 观察证书申请，出现 "certificate obtained successfully" 即成功
+./rpctl webssh add-user admin   # 创建 Web SSH 管理员账号（公网注册已屏蔽）
 ```
 
 ### Caddy 镜像的分发方式
@@ -112,5 +113,5 @@ docker run --rm -v rp-proxy_caddy_data:/data -v $PWD/backups/<时间戳>:/backup
 | --- | --- |
 | 证书申请失败 | `./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题) |
 | 502 Bad Gateway | 后端容器未运行或未加入 `proxy` 网络：`./rpctl ps` |
-| Web SSH 页面 403 | `sshwifty.conf.json` 中 `HostName` 与访问域名不一致 |
+| Web SSH 注册返回 403 | 正常，账号用 `./rpctl webssh add-user` 在服务器上创建，见 [webssh README](../services/webssh/README.md) |
 | Web SSH 连不上本机 | 宿主机防火墙拦截 Docker 网段到 22 端口，见上文 |

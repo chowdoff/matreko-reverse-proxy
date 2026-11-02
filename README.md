@@ -4,10 +4,10 @@
 
 - **对外**：对接 Cloudflare，通过 DNS-01 自动申请/续期 SSL 证书，脚本化管理 DNS 记录
 - **对内**：Caddy 统一反代到各个后台服务（Docker 容器），后台服务不直接暴露端口
-- **已接入服务**：Web SSH（[Sshwifty](https://github.com/nirui/sshwifty)）
+- **已接入服务**：Web SSH（[Termix](https://github.com/Termix-SSH/Termix)）
 
 ```
-浏览器 ──HTTPS──▶ Cloudflare（可选橙色云代理）──▶ 服务器 :443 Caddy ──proxy 网络──▶ sshwifty:8182 ──SSH──▶ 目标主机
+浏览器 ──HTTPS──▶ Cloudflare（可选橙色云代理）──▶ 服务器 :443 Caddy ──proxy 网络──▶ termix:8080 ──SSH──▶ 目标主机
                                                        │
                                                        └─ 证书：Let's Encrypt DNS-01（Cloudflare API）
 ```
@@ -26,8 +26,7 @@
 ├── services/                   # 各后台服务，一个目录一个服务
 │   └── webssh/
 │       ├── compose.yaml
-│       ├── init.sh             #   ./rpctl init 时自动执行（生成本地配置）
-│       ├── sshwifty.conf.example.json
+│       ├── cli.sh              #   服务命令：./rpctl webssh add-user
 │       └── README.md
 ├── scripts/
 │   ├── cf-dns.sh               # Cloudflare DNS 记录同步
@@ -46,13 +45,19 @@
 # 编辑 .env：
 #   CADDY_TLS_MODE=internal
 #   WEBSSH_DOMAIN=ssh.localhost
-./rpctl init                    # 生成 webssh 配置，并打印访问口令
+./rpctl init                    # 创建 proxy 网络等
 ./rpctl image load              # 导入仓库中预构建的 Caddy 镜像（或 ./rpctl build 自行构建）
 ./rpctl check
 ./rpctl up
 ```
 
-浏览器打开 <https://ssh.localhost>（自签证书，需手动信任），输入口令即可连接本机 SSH。
+创建 Web SSH 管理员账号：
+
+```bash
+./rpctl webssh add-user admin
+```
+
+浏览器打开 <https://ssh.localhost>（自签证书，需手动信任）登录即可。
 
 ### 生产服务器部署
 
@@ -80,7 +85,7 @@
 
 ## 约定
 
-- **密钥不入库**：`.env`、`services/*/sshwifty.conf.json` 等由 `init` 生成，已在 `.gitignore` 中忽略；仓库里只放 `*.example*` 模板
+- **密钥不入库**：`.env` 等含密钥的文件已在 `.gitignore` 中忽略，仓库里只放 `*.example*` 模板；服务数据放在 Docker 数据卷中
 - **后台服务不映射端口**：只加入外部网络 `proxy`，由 Caddy 通过容器名访问
 - **域名变量统一命名为 `XXX_DOMAIN`**：Caddy 通过 `{$XXX_DOMAIN}` 引用，`rpctl dns sync` 会自动同步所有这类变量
 - **一个服务 = `services/<name>/` + `proxy/sites/<name>.caddy`**，详见 [docs/adding-a-service.md](docs/adding-a-service.md)

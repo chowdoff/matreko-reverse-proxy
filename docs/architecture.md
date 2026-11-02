@@ -14,7 +14,7 @@
                     │   └─ sites/*.caddy 按域名路由                           │
                     │        │ Docker 网络 proxy（外部网络，各项目共享）       │
                     │        ▼                                                │
-                    │   sshwifty:8182   <后续服务>:port   ...                 │
+                    │   termix:8080     <后续服务>:port   ...                 │
                     └────────────────────────────────────────────────────────┘
 ```
 
@@ -61,7 +61,7 @@ Nginx Proxy Manager 的配置存放在 SQLite 中，只能在 UI 操作，不利
   │
   ├──(rpctl --env-file)──▶ 各 compose.yaml 中 ${VAR} 插值
   │
-  └──(rpctl init → services/*/init.sh)──▶ 各服务本地配置（如 sshwifty.conf.json）
+  └──(rpctl init → services/*/init.sh)──▶ 各服务本地配置（如有）
 ```
 
 ## 数据与备份
@@ -70,6 +70,6 @@ Nginx Proxy Manager 的配置存放在 SQLite 中，只能在 UI 操作，不利
 | --- | --- | --- |
 | 证书、ACME 账户 | 卷 `rp-proxy_caddy_data` | 丢失后会自动重新申请，但要注意 Let's Encrypt 频率限制 |
 | 全局配置与密钥 | `.env` | 不入库，需单独备份 |
-| 服务本地配置 | `services/*/` 中被 git 忽略的文件 | 如 `sshwifty.conf.json` |
+| 服务数据 | 卷 `rp-<服务>_*` | 如 `rp-webssh_termix_data`（Termix 数据库与加密密钥） |
 
 `./rpctl backup` 会打包以上内容到 `backups/<时间戳>/`。

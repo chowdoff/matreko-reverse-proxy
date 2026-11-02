@@ -1,31 +1,37 @@
-# Web SSH：Sshwifty
-# 通过 ./rpctl up webssh 启动；配置文件由 ./rpctl init 从 sshwifty.conf.example.json 生成
+# Web SSH：Termix（https://github.com/Termix-SSH/Termix）
+# 通过 ./rpctl up webssh 启动，经 Caddy 以 https://$WEBSSH_DOMAIN 访问
 name: rp-webssh
 
 services:
-  sshwifty:
-    image: ${SSHWIFTY_IMAGE:-niruix/sshwifty:latest}
-    container_name: sshwifty
+  termix:
+    image: ${TERMIX_IMAGE:-ghcr.io/termix-ssh/termix:26.11.0}
+    container_name: termix
     restart: unless-stopped
-    # 以部署用户的 UID/GID 运行，使其能读取 600 权限的配置文件（rpctl 自动传入）
-    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
-      SSHWIFTY_CONFIG: /etc/sshwifty/sshwifty.conf.json
+      PORT: "8080"
+      # 容器以 root 启动后降权为 node 用户（UID/GID 如下）
+      PUID: "1000"
+      PGID: "1000"
+      # 只信任 Docker 内网（Caddy 所在网段）传来的 X-Forwarded-For
+      TRUSTED_PROXIES: "172.16.0.0/12"
+      # 注册接口已在 Caddy 层对公网屏蔽（proxy/sites/webssh.caddy），
+      # 这里保持 true，供 ./rpctl webssh add-user 在容器内部创建账号
+      ALLOW_REGISTRATION: "true"
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ./sshwifty.conf.json:/etc/sshwifty/sshwifty.conf.json:ro
+      # 数据库、加密密钥、上传文件 —— 需要备份（./rpctl backup）
+      - termix_data:/app/data
     # 让容器能通过 host.docker.internal 连到宿主机自身的 sshd
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - proxy
     # 不映射端口：只能经由 Caddy 访问
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  termix_data:
 
 networks:
   proxy:

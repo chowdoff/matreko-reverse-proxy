@@ -31,7 +31,7 @@ usage() {
   ps                   查看所有相关容器状态
   logs    <目标> [-f]  查看日志
   reload               热加载 Caddy 配置（修改 Caddyfile / sites 后使用）
-  compose <目标> ...   透传 docker compose 命令，例如 ./rpctl compose webssh exec sshwifty sh
+  compose <目标> ...   透传 docker compose 命令，例如 ./rpctl compose webssh exec termix sh
 
 Cloudflare
   dns verify           校验 CF_API_TOKEN
@@ -39,7 +39,10 @@ Cloudflare
   dns sync [--dry-run] 把各 *_DOMAIN 指向 SERVER_IPV4/SERVER_IPV6
 
 运维
-  backup               备份 Caddy 证书数据卷与各服务配置到 backups/
+  backup               备份所有数据卷（证书、Termix 数据等）与 .env 到 backups/
+
+服务命令
+  <服务> <子命令>      执行 services/<服务>/cli.sh，如 ./rpctl webssh add-user
 
 目标：proxy（Caddy）或 services/ 下的服务名：$(list_services | tr '\n' ' ')
 EOF
@@ -171,7 +174,8 @@ cmd_up() {
   local t
   for t in $(targets_or_all "$@"); do
     info "启动 $t"
-    dc "$t" up -d
+    # --remove-orphans：清理 compose 文件中已删除的服务容器（如替换后端时的旧容器）
+    dc "$t" up -d --remove-orphans
   done
 }
 
@@ -230,10 +234,15 @@ cmd_backup() {
   mkdir -p "$dest"
   chmod 700 "$ROOT/backups" "$dest"
 
-  info "备份 Caddy 数据卷（证书、ACME 账户）"
-  # 卷内文件属 root，以 root 打包后把归档归还给当前用户（复用 Caddy 镜像，无需额外拉取）
-  docker run --rm -v rp-proxy_caddy_data:/data:ro -v "$dest:/backup" --entrypoint sh "$CADDY_IMAGE" \
-    -c "tar czf /backup/caddy_data.tgz -C /data . && chown $(id -u):$(id -g) /backup/caddy_data.tgz"
+  # 本项目所有 compose 项目名均以 rp- 开头，其数据卷为 rp-<项目>_<卷名>
+  local vol
+  for vol in $(docker volume ls -q --filter name='^rp-'); do
+    [[ "$vol" == *_caddy_config ]] && continue # 可再生的运行时配置，无需备份
+    info "备份数据卷 $vol"
+    # 卷内文件属 root，以 root 打包后把归档归还给当前用户（复用 Caddy 镜像，无需额外拉取）
+    docker run --rm -v "$vol:/data:ro" -v "$dest:/backup" --entrypoint sh "$CADDY_IMAGE" \
+      -c "tar czf /backup/$vol.tgz -C /data . && chown $(id -u):$(id -g) /backup/$vol.tgz"
+  done
   info "备份 .env 与各服务本地配置"
   tar czf "$dest/config.tgz" -C "$ROOT" .env $(cd "$ROOT" && git ls-files --others --ignored --exclude-standard services 2>/dev/null || true)
   chmod 600 "$dest"/*
@@ -259,7 +268,14 @@ main() {
     dns) "$ROOT/scripts/cf-dns.sh" "$@" ;;
     backup) cmd_backup ;;
     help | -h | --help) usage ;;
-    *) err "未知命令：$cmd"; usage; exit 1 ;;
+    *)
+      if [[ -f "$ROOT/services/$cmd/cli.sh" ]]; then
+        load_env
+        ( source "$ROOT/services/$cmd/cli.sh" "$@" )
+      else
+        err "未知命令：$cmd"; usage; exit 1
+      fi
+      ;;
   esac
 }
 

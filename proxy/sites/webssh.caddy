@@ -1,8 +1,16 @@
-# Web SSH（Sshwifty）
-# 后端：services/webssh，容器名 sshwifty，监听 8182，仅加入 proxy 网络，不对外暴露端口
-# WebSocket 由 reverse_proxy 自动处理，无需额外配置
+# Web SSH（Termix）
+# 后端：services/webssh，容器名 termix，监听 8080，仅加入 proxy 网络，不对外暴露端口
+# WebSocket、大文件上传（SFTP）由 reverse_proxy 自动处理：Caddy 默认无请求体大小限制、无读超时
 {$WEBSSH_DOMAIN} {
 	import common
 
-	reverse_proxy sshwifty:8182
+	# 禁止公网注册账号（Termix 中注册即建号，第一个注册者成为管理员）
+	# 账号只能在服务器上通过 ./rpctl webssh add-user 创建
+	@register {
+		method POST
+		path_regexp (?i)^/+users/+create/*$
+	}
+	respond @register "Registration is disabled" 403
+
+	reverse_proxy termix:8080
 }
