@@ -63,36 +63,71 @@ env_set() {
   mv "$tmp" "$f"
 }
 
+# env_unset KEY —— 删除 .env 中的一项，保持 600 权限
+env_unset() {
+  local f="$ROOT/.env" tmp
+  tmp="$(mktemp "$f.XXXXXX")"
+  awk -v k="$1" 'index($0, k "=") != 1' "$f" >"$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$f"
+}
+
 # 列出 .env 中所有 *_DOMAIN 变量名
 domain_vars() {
   grep -oE '^[A-Z0-9_]+_DOMAIN=' "$ROOT/.env" | tr -d '=' || true
 }
 
-# 列出走 Cloudflare Tunnel 的域名变量名：proxy/sites/*.caddy 中站点地址写成 {$XXX_DOMAIN}:8443 的
+# 列出所有站点文件：仓库跟踪的 proxy/sites/*.caddy，以及服务器本地的 proxy/sites/local/*.caddy（不入库）
+site_files() {
+  local f
+  for f in "$ROOT"/proxy/sites/*.caddy "$ROOT"/proxy/sites/local/*.caddy; do
+    [[ -f "$f" ]] && printf '%s\n' "$f"
+  done
+  return 0
+}
+
+# 列出走 Cloudflare Tunnel 的域名变量名：站点地址写成 {$XXX_DOMAIN}:8443 的
 tunnel_domain_vars() {
-  cat "$ROOT"/proxy/sites/*.caddy 2>/dev/null |
+  site_files | while read -r f; do cat "$f"; done |
     sed -nE 's/^\{\$([A-Z0-9_]+_DOMAIN)\}:8443([[:space:],{].*)?$/\1/p' | sort -u
+}
+
+# 列出站点文件用到、但 .env 中为空的域名变量，每行「变量名 站点文件」（需先 load_env）
+missing_site_vars() {
+  local f v
+  while read -r f; do
+    for v in $(grep -oE '\{\$[A-Z0-9_]+_DOMAIN\}' "$f" | tr -d '{}$' | sort -u); do
+      [[ -n "${!v:-}" ]] || printf '%s %s\n' "$v" "$(relpath "$f")"
+    done
+  done < <(site_files)
 }
 
 # is_tunnel_var VAR —— 该域名变量是否走 Tunnel
 is_tunnel_var() { tunnel_domain_vars | grep -qx "$1"; }
 
-# 列出所有服务（services/ 下含 compose.yaml 的目录）
-list_services() {
+# 服务目录：仓库跟踪的 services/<name>，或服务器本地的 services/local/<name>（不入库）
+service_dir() {
   local d
-  for d in "$ROOT"/services/*/; do
-    [[ -f "$d/compose.yaml" ]] && basename "$d"
+  for d in "$ROOT/services/$1" "$ROOT/services/local/$1"; do
+    if [[ -f "$d/compose.yaml" ]]; then printf '%s' "$d"; return 0; fi
   done
+  return 1
 }
 
-# 目标名 -> compose 目录；proxy 为 Caddy 核心，其余为 services/<name>
+# 列出所有服务（含 compose.yaml 的服务目录）
+list_services() {
+  local d
+  for d in "$ROOT"/services/*/ "$ROOT"/services/local/*/; do
+    [[ -f "$d/compose.yaml" ]] && basename "$d"
+  done
+  return 0
+}
+
+# 目标名 -> compose 目录；proxy 为 Caddy 核心，其余为服务目录
 target_dir() {
   case "$1" in
     proxy) printf '%s' "$ROOT/proxy" ;;
-    *)
-      [[ -f "$ROOT/services/$1/compose.yaml" ]] || die "未知服务：$1（可用：proxy $(list_services | tr '\n' ' ')）"
-      printf '%s' "$ROOT/services/$1"
-      ;;
+    *) service_dir "$1" || die "未知服务：$1（可用：proxy $(list_services | tr '\n' ' ')）" ;;
   esac
 }
 

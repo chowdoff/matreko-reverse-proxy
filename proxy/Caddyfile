@@ -1,6 +1,7 @@
 # =============================================================
 # Caddy 全局配置
 #   - 每个站点一个文件，放在 sites/*.caddy，由末尾的 import 自动加载
+#   - sites/local/*.caddy：服务器上用 ./rpctl site add 添加的站点，不入库
 #   - 两种接入方式（每个站点自选，见 docs/cloudflare.md）：
 #       {$XXX_DOMAIN}       公网 443：DNS 指向服务器 IP（橙色云朵），默认
 #       {$XXX_DOMAIN}:8443  Tunnel：8443 不对公网发布，只有 cloudflared 能访问
@@ -74,3 +75,4 @@
 
 # ---------- 加载各站点 ----------
 import sites/*.caddy
+import sites/local/*.caddy

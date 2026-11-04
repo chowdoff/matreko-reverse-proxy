@@ -211,6 +211,8 @@ git pull
                       # （仅改了 Caddyfile / sites 时也可只执行 ./rpctl reload）
 ```
 
+新增 / 删除公网 443 站点：在服务器上执行 `./rpctl site add` / `./rpctl site remove`，配置只保存在本机，见 [adding-a-service.md](adding-a-service.md#快速方式在服务器上-rpctl-site-add)。
+
 升级 Caddy（修改 `proxy/Dockerfile` 中的 `CADDY_VERSION`）：
 
 ```bash
@@ -233,7 +235,7 @@ git pull && ./rpctl image load && ./rpctl up proxy
 ## 备份与迁移
 
 ```bash
-./rpctl backup        # 生成 backups/<时间戳>/{caddy_data.tgz,config.tgz}
+./rpctl backup        # 生成 backups/<时间戳>/：各数据卷 *.tgz，以及 config.tgz（.env、site add 添加的本地站点等）
 ```
 
 迁移到新服务器：克隆仓库 → 解压 `config.tgz` 到项目根目录 → 执行一次 `./rpctl up proxy` 创建数据卷后 `./rpctl down proxy` → 恢复证书卷：

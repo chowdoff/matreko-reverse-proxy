@@ -2,6 +2,9 @@
 .env
 *.local
 services/*/secrets/
+# rpctl site add 在服务器上添加的站点，只保存在本机
+proxy/sites/local/
+services/local/
 
 # 运行时数据
 data/

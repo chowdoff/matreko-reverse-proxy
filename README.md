@@ -25,7 +25,7 @@
 │   ├── Dockerfile              #   官方 Caddy + cloudflare DNS 插件 + cloudflare IP 插件
 │   ├── compose.yaml            #   caddy + cloudflared（设置了 CF_TUNNEL_TOKEN 时启动）
 │   ├── Caddyfile               #   全局配置、TLS 片段、通用 header/日志
-│   └── sites/*.caddy           #   每个站点一个文件（路由表）
+│   └── sites/*.caddy           #   每个站点一个文件（路由表）；sites/local/ 为服务器本地站点，不入库
 ├── services/                   # 各后台服务，一个目录一个服务
 │   └── webssh/
 │       ├── compose.yaml
@@ -35,6 +35,7 @@
 │   ├── cf-dns.sh               # Cloudflare DNS 记录与 Tunnel 路由同步
 │   ├── cf-tunnel.sh            # Cloudflare Tunnel 创建与状态
 │   ├── firewall-check.sh       # 在开发机上从外部检查服务器防火墙（独立脚本）
+│   ├── site.sh                 # 服务器本地站点：./rpctl site add / remove（配置只存本机）
 │   └── lib/                    # 公共函数（common.sh、cf.sh）
 ├── images/                     # 预构建的 Caddy 镜像（开发机 image save，服务器 image load）
 ├── templates/service/          # 新服务模板
@@ -85,6 +86,7 @@
 | `./rpctl dns verify / list / sync [--dry-run]` | Cloudflare Token 校验 / 查看记录 / 同步 DNS 记录与 Tunnel 路由 |
 | `./rpctl tunnel create / status` | 创建 Cloudflare Tunnel / 查看 Tunnel 状态 |
 | `./rpctl backup` | 备份证书数据卷与本地配置到 `backups/` |
+| `./rpctl site add / remove [名称]` | 在服务器上交互式添加 / 删除公网 443 站点，配置只保存在本机，见 [新增服务](docs/adding-a-service.md) |
 | `./rpctl compose <目标> ...` | 透传任意 docker compose 命令 |
 
 目标为 `proxy` 或 `services/` 下的目录名（如 `webssh`）。
