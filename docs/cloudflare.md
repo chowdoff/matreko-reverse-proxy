@@ -59,11 +59,12 @@ Caddy 在公网 443 上只信任 [Cloudflare IP 段](https://www.cloudflare.com/
 
 ### Tunnel 站点
 
-首次使用时创建 Tunnel：
+首次使用时创建 Tunnel（完整部署流程见 [deploy.md](deploy.md#部署步骤)，已部署的服务器见 [deploy.md 迁移步骤](deploy.md#把-web-ssh-迁移到-tunnel)）：
 
 ```bash
-./rpctl dns verify                # 校验 Token（含 Tunnel 权限）
+./rpctl dns verify                # 校验 Token，包括是否有 Cloudflare Tunnel 权限
 ./rpctl tunnel create             # 创建 Tunnel，运行 Token 自动写入 .env 的 CF_TUNNEL_TOKEN
+./rpctl check                     # 检查配置
 ./rpctl up                        # 设置了 CF_TUNNEL_TOKEN 后会同时启动 cloudflared
 ./rpctl tunnel status             # 确认状态为 healthy，且有连接
 ./rpctl dns sync --dry-run        # 预览

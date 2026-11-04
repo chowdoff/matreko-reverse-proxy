@@ -35,6 +35,7 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 ./rpctl up
 ./rpctl logs proxy -f   # 观察证书申请，出现 "certificate obtained successfully" 即成功
 ./rpctl tunnel status   # 确认 Tunnel 为 healthy
+./rpctl dns sync --dry-run   # 预览
 ./rpctl dns sync        # 推送 Tunnel 路由，并创建各域名的 DNS 记录
 ./rpctl webssh add-user admin   # 创建 Web SSH 管理员账号（公网注册已屏蔽）
 ```
@@ -66,7 +67,7 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 
    ```bash
    cd /opt/matreko-reverse-proxy
-   ./rpctl dns verify                # 确认可访问 Tunnel
+   ./rpctl dns verify                # 最后一行应为「Token 有 Cloudflare Tunnel 权限」
    ./rpctl tunnel create             # 写入 CF_TUNNEL_TOKEN
    ./rpctl check
    ./rpctl up                        # 启动 cloudflared；Caddy 重建后 Web SSH 只在 8443 上提供
