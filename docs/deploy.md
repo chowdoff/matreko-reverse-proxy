@@ -83,14 +83,118 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 
 ## 防火墙
 
-- **公网 443 站点**：需要放行 `80/tcp`（HTTP→HTTPS 跳转）、`443/tcp`、`443/udp`（HTTP/3）
-- **Tunnel 站点**：不需要入站端口，出站需允许 7844（UDP/TCP）
-- **8443**：不需要也不应放行，它只发布在 127.0.0.1 上
-- **管理用的 SSH 端口**：按需放行
+推荐用云厂商的防火墙限制入站，不用宿主机的 ufw，原因是 **Docker 发布的端口会绕过 ufw**：Docker 直接写 iptables 的 nat 表，用 ufw 限制 80/443 不起作用。
 
-**注意：Docker 发布的端口会绕过 ufw**（Docker 直接写 iptables 的 nat 表）。用 ufw 限制 80/443 是无效的，若要限制来源（例如只允许 Cloudflare IP），需要写在 `DOCKER-USER` 链中，或使用云厂商的安全组。
+各类站点对端口的要求：
 
-Web SSH 容器通过 Docker 网关（`host.docker.internal`）连接宿主机 sshd。如果宿主机 ufw 默认拒绝入站，需要放行 Docker 网段访问 22：
+- **公网 443 站点**：Cloudflare 回源用 `443/tcp`
+- **Tunnel 站点**：不需要入站端口；cloudflared 主动出站连接 7844（UDP/TCP）
+- **8443**：只发布在 127.0.0.1 上，不需要也不应放行
+- **SSH**：可以不对公网开放，管理走 Web SSH，见下文
+
+### DigitalOcean Cloud Firewall
+
+在控制台 **Networking → Firewalls → Create Firewall** 中创建。
+
+**工作方式**（摘自[官方文档](https://docs.digitalocean.com/products/networking/firewalls/)）：
+
+- **有状态**：出站连接的回包自动放行
+- **默认拒绝**：只放行规则里列出的流量，入站、出站都是如此
+- **也作用于 VPC 内网流量**：DigitalOcean 的云防火墙不是只拦公网，VPC 内网流量同样要规则放行。本项目的内部通信都在本机 Docker 网络内，不经过云防火墙，所以不需要 VPC 规则：
+  - cloudflared → Caddy → 各服务
+  - Termix → 宿主机 sshd
+
+  以后如果同一 VPC 里有其他 Droplet 要访问本机，再按私网网段添加规则。
+
+**入站规则**（只有这一条）：
+
+| Type | Protocol | Port | Sources | 用途 |
+| --- | --- | --- | --- | --- |
+| HTTPS | TCP | 443 | All IPv4、All IPv6 | 公网 443 站点 |
+
+还没有公网 443 站点时，Caddy 不会在 443 上监听，外部连接会被立即拒绝，属于正常现象。规则可以先留着，以后加站点时不用再改。
+
+有仅 DNS（`CF_PROXIED=false`）的站点时，再加两条，来源都是 All IPv4、All IPv6：
+
+- **80/tcp**：HTTP→HTTPS 跳转
+- **443/udp**：HTTP/3
+
+橙色云朵站点不需要这两条：开启 *Always Use HTTPS*（见 [cloudflare.md](cloudflare.md#3-ssltls-设置)）后，Cloudflare 在边缘直接跳转 HTTPS，不会回源到 80；Cloudflare 回源也不使用 HTTP/3。
+
+**不要放行的端口：**
+
+- **22（SSH）**：见下方「SSH 不对公网开放」
+- **8443**：只在本机回环上
+- **7844**：cloudflared 是出站连接
+- **ICMP**：需要 ping 排障时再临时放行
+
+> **为什么 443 不只对 Cloudflare 开放**：只放行 Cloudflare IP 段确实能挡住直连源站，但 Cloudflare 的 IP 段变化时，云防火墙不会自动更新，维护成本高，忘了更新还会导致站点 522。对所有 IP 开放 443 的风险是可控的：
+>
+> - 直连服务器 IP 只能访问到公网 443 站点本身，与经过 Cloudflare 访问没有区别，只是少了 Cloudflare 的防护
+> - Tunnel 站点（Web SSH）在 443 上不提供服务
+> - 伪造 `CF-Connecting-IP` 头无效：Caddy 只信任来自 Cloudflare IP 段的该请求头，这份 IP 段由插件自动刷新
+>
+> 需要更强的防护时，可以只把 443 的来源改为 Cloudflare IP 段（`curl -s https://www.cloudflare.com/ips-v4; echo; curl -s https://www.cloudflare.com/ips-v6`），代价是 IP 段变化时要手动同步，且所有公网 443 站点都必须开启橙色云朵。
+
+**出站规则**：保留创建时默认的「全部 ICMP / TCP / UDP 到所有 IPv4、IPv6」。服务需要访问的出站目标很多：
+
+- cloudflared：7844（UDP/TCP）
+- Caddy 申请证书、调用 Cloudflare API：443
+- 检查 DNS 传播：1.1.1.1:53
+- `git pull`：GitHub 的 22 端口
+- 拉取镜像、apt、NTP
+- Droplet Agent：169.254.169.254
+
+收紧出站规则的收益很小，却容易让上述某项悄悄失效。
+
+最后在 **Apply to Droplets** 中选中这台服务器（或给它打个标签再按标签应用），然后点 **Create Firewall**。
+
+**SSH 不对公网开放：**
+
+不放行 22 时，Web SSH 仍然可以登录服务器。原因是 Termix 和 sshd 在同一台机器上，Termix 连接本机 sshd 时，无论填 `host.docker.internal` 还是本机的内网 IP，目标都是本机地址，流量不离开 Droplet，云防火墙拦不到。用 Termix 连同一 VPC 的其他 Droplet 则会经过云防火墙，需要在对方的防火墙放行来自本机内网 IP 的 22。登录服务器要先经过 Cloudflare Tunnel，再通过 Termix 的账号登录，攻击面比公网 22 小得多。
+
+代价是日常只剩 Web SSH 这一个管理入口，要提前准备好备用方式：
+
+- **Recovery Console**（控制台 → Droplet → Access）：带外访问，不受网络和防火墙影响，但需要 root 密码登录。用 SSH 密钥创建的 Droplet 默认没有 root 密码，**请提前在服务器上执行 `sudo passwd root` 设置一个强密码**。临时也可以用控制台的 *Reset Root Password* 重置，但会让服务器关机重启一次
+- **临时放行 SSH**：在云防火墙中加一条 SSH / TCP / 22，来源只填你当前的公网 IP，用完删除
+- **Droplet Console**（网页控制台）也走 SSH，22 不放行时无法使用，这种情况用 Recovery Console
+
+**注意事项：**
+
+- **宿主机 ufw 可以保持 inactive**：入站已由云防火墙控制
+
+**验证**：在开发机（不是服务器本身）上运行检查脚本：
+
+```bash
+scripts/firewall-check.sh <服务器 IP> -t ssh.example.com
+```
+
+脚本会检查以下几项：
+
+- **应开放的端口**：443 已放行
+  - 有程序监听时能连上
+  - 还没有公网 443 站点时，连接会被立即拒绝，也算通过
+- **SSH**：被拦截，或只对当前 IP 开放，都算正常
+- **应拦截的端口**：80、8443、7844 以及常见的数据库、Docker API 等端口都被拦截
+  - 被拦截时连接会超时
+  - 如果立即被拒绝，说明防火墙没有拦截这个端口，只是恰好没有程序在监听
+- **Tunnel 站点**（`-t` 指定的域名）：直连服务器 IP 时，80/443 上拿不到该站点
+
+几点说明：
+
+- **独立脚本**：不依赖 `.env`，也可以单独拷到其他机器上使用
+- **常用选项**：
+  - 有仅 DNS 站点时加 `--dns-only`，此时 80 应开放
+  - SSH 不在 22 端口时用 `--ssh-port` 指定
+- **不能在服务器上运行**：服务器访问自己的公网 IP 不经过云防火墙
+- **本机有透明代理时无法检查**：例如开着 Clash 的 TUN 模式，任何端口都会显示为开放，脚本会识别出来并提示
+- **另外两项要手动确认**：
+  - 443/udp：UDP 无法可靠探测
+  - 临时放行 SSH 时，来源是否只有你的 IP：从一个 IP 看不出其他 IP 是否被拦截
+
+### 开启 ufw 时
+
+Web SSH 容器通过 Docker 网关（`host.docker.internal`）连接宿主机 sshd。如果开启了 ufw 且默认拒绝入站，需要放行 Docker 网段访问 22：
 
 ```bash
 sudo ufw allow from 172.16.0.0/12 to any port 22 proto tcp
@@ -148,6 +252,7 @@ docker run --rm -v rp-proxy_caddy_data:/data -v $PWD/backups/<时间戳>:/backup
 | --- | --- |
 | 证书申请失败 | `./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题) |
 | Tunnel 不在线 / 502 / Error 1033 | `./rpctl tunnel status`、`./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题) |
+| 公网 443 站点 522 / 超时 | 在开发机上运行 `scripts/firewall-check.sh <服务器 IP>`；若 443 只对 Cloudflare 开放，检查 IP 段是否已过期，见上文 |
 | 502 Bad Gateway | 后端容器未运行或未加入 `proxy` 网络：`./rpctl ps` |
 | Web SSH 注册返回 403 | 正常，账号用 `./rpctl webssh add-user` 在服务器上创建，见 [webssh README](../services/webssh/README.md) |
 | Web SSH 连不上本机 | 宿主机防火墙拦截 Docker 网段到 22 端口，见上文 |

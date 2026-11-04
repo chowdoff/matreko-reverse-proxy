@@ -34,6 +34,7 @@
 ├── scripts/
 │   ├── cf-dns.sh               # Cloudflare DNS 记录与 Tunnel 路由同步
 │   ├── cf-tunnel.sh            # Cloudflare Tunnel 创建与状态
+│   ├── firewall-check.sh       # 在开发机上从外部检查服务器防火墙（独立脚本）
 │   └── lib/                    # 公共函数（common.sh、cf.sh）
 ├── images/                     # 预构建的 Caddy 镜像（开发机 image save，服务器 image load）
 ├── templates/service/          # 新服务模板

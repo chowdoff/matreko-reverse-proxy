@@ -103,9 +103,9 @@ Cloudflare 控制台 → 你的域名 → **SSL/TLS**：
 
 ## 4. （可选）公网 443 只接受 Cloudflare 流量
 
-开启代理后，可以在服务器防火墙上只放行 [Cloudflare IP 段](https://www.cloudflare.com/ips/)访问 443，避免绕过 Cloudflare 直连源站。
+开启代理后，可以在云厂商防火墙上只放行 [Cloudflare IP 段](https://www.cloudflare.com/ips/)访问 443，避免有人绕过 Cloudflare 直连源站。代价是 IP 段变化时要手动同步，本项目默认不这样做，权衡见 [deploy.md 防火墙](deploy.md#防火墙)。
 
-注意 Docker 发布的端口会绕过 ufw，规则需要写在 `DOCKER-USER` 链中，见 [deploy.md](deploy.md#防火墙)。这一步只影响公网 443 站点，Tunnel 站点不需要。
+注意 Docker 发布的端口会绕过 ufw，用 ufw 做不到这一点。这一步只影响公网 443 站点，Tunnel 站点不需要。
 
 ## 常见问题
 
