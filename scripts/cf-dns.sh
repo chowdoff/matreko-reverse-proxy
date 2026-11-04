@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Cloudflare DNS 管理
-#   cf-dns.sh verify            校验 API Token 是否有效
+#   cf-dns.sh verify            校验 API Token 权限（有 Tunnel 站点或 Tunnel Token 时同时检查 Tunnel）
 #   cf-dns.sh list              列出 .env 中各 *_DOMAIN 当前的 DNS 记录
-#   cf-dns.sh sync [--dry-run]  把各 *_DOMAIN 的 A/AAAA 记录指向 SERVER_IPV4/SERVER_IPV6（存在则更新，不存在则创建）
+#   cf-dns.sh sync [--dry-run]  把各 *_DOMAIN 发布到 Cloudflare，接入方式由站点文件决定（见 proxy/Caddyfile）：
+#     Tunnel 站点（{$XXX_DOMAIN}:8443）  推送 Tunnel 路由，DNS 为指向 Tunnel 的 CNAME（必然开启代理）
+#     其他站点                          DNS 为指向 SERVER_IPV4/SERVER_IPV6 的 A/AAAA，代理开关由 CF_PROXIED 决定
+#   *_DOMAIN 对应的域名归本项目管理：同名的其他 A/AAAA/CNAME 记录会被删除（切换接入方式时自动替换）
 # 通常经由 ./rpctl dns <子命令> 调用
 set -euo pipefail
 
@@ -11,100 +14,110 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 source "$ROOT/scripts/lib/common.sh"
 require_cmd curl jq
 load_env
+# shellcheck source=lib/cf.sh
+source "$ROOT/scripts/lib/cf.sh"
 
-CF_API="https://api.cloudflare.com/client/v4"
-: "${CF_API_TOKEN:?请在 .env 中设置 CF_API_TOKEN}"
-
-# cf_api METHOD PATH [JSON_BODY]  —— 失败时打印 Cloudflare 返回的错误并退出
-cf_api() {
-  local method="$1" path="$2" body="${3:-}" resp
-  local args=(-sS -X "$method" -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json")
-  [[ -n "$body" ]] && args+=(--data "$body")
-  resp="$(curl "${args[@]}" "$CF_API$path")" || die "请求 Cloudflare API 失败：$method $path"
-  if [[ "$(jq -r '.success' <<<"$resp")" != "true" ]]; then
-    err "Cloudflare API 错误（$method $path）：$(jq -c '.errors' <<<"$resp")"
-    if [[ "$path" == *dns_records* ]] && jq -e '.errors[]? | select(.code == 10000)' <<<"$resp" >/dev/null; then
-      err "提示：Token 缺少 DNS 权限。请在 Cloudflare 编辑该 Token，添加 Zone → DNS → Edit（注意不是“DNS Settings”），"
-      err "      并确认 Zone Resources 包含 $CF_ZONE，见 docs/cloudflare.md"
-    fi
-    exit 1
-  fi
-  printf '%s' "$resp"
-}
-
-zone_id() {
-  : "${CF_ZONE:?请在 .env 中设置 CF_ZONE}"
-  local id
-  id="$(cf_api GET "/zones?name=$CF_ZONE" | jq -r '.result[0].id // empty')"
-  [[ -n "$id" ]] || die "找不到 Zone：$CF_ZONE（检查域名是否托管在该账号下、Token 是否有 Zone:Read 权限）"
-  printf '%s' "$id"
-}
-
-# 只处理属于 CF_ZONE 的域名
-in_zone() { [[ "$1" == "$CF_ZONE" || "$1" == *".$CF_ZONE" ]]; }
+COMMENT="managed by matreko-reverse-proxy"
 
 cmd_verify() {
-  local status
+  local status zid
   status="$(cf_api GET "/user/tokens/verify" | jq -r '.result.status')"
   ok "Token 有效，状态：$status"
-  local zid
   zid="$(zone_id)"
   ok "Zone $CF_ZONE 的 ID：$zid"
   cf_api GET "/zones/$zid/dns_records?per_page=1" >/dev/null
   ok "Token 可读取 $CF_ZONE 的 DNS 记录（编辑权限会在 dns sync / 申请证书时验证）"
+  if [[ -n "${CF_TUNNEL_TOKEN:-}" || -n "$(tunnel_domain_vars)" ]]; then
+    local t
+    t="$(cf_api GET "$(tunnel_path)" | jq -r '.result | "\(.name)（状态：\(.status)）"')"
+    ok "Token 可访问 Tunnel：$t"
+  fi
 }
 
 cmd_list() {
   local zid var name
   zid="$(zone_id)"
-  printf '%-10s %-32s %-6s %-40s %s\n' VAR NAME TYPE CONTENT PROXIED
+  printf '%-10s %-7s %-32s %-6s %-48s %s\n' VAR INGRESS NAME TYPE CONTENT PROXIED
+  local mode
   for var in $(domain_vars); do
     name="${!var:-}"
     [[ -n "$name" ]] || continue
+    if is_tunnel_var "$var"; then mode=tunnel; else mode=direct; fi
     if ! in_zone "$name"; then
-      printf '%-10s %-32s %s\n' "${var%_DOMAIN}" "$name" "(不属于 $CF_ZONE，跳过)"
+      printf '%-10s %-7s %-32s %s\n' "${var%_DOMAIN}" "$mode" "$name" "(不属于 $CF_ZONE，跳过)"
       continue
     fi
     cf_api GET "/zones/$zid/dns_records?name=$name" |
-      jq -r --arg v "${var%_DOMAIN}" '.result[] | [$v, .name, .type, .content, .proxied] | @tsv' |
-      while IFS=$'\t' read -r v n t c p; do printf '%-10s %-32s %-6s %-40s %s\n' "$v" "$n" "$t" "$c" "$p"; done
+      jq -r --arg v "${var%_DOMAIN}" --arg m "$mode" '.result[] | [$v, $m, .name, .type, .content, .proxied] | @tsv' |
+      while IFS=$'\t' read -r v m n t c p; do printf '%-10s %-7s %-32s %-6s %-48s %s\n' "$v" "$m" "$n" "$t" "$c" "$p"; done
   done
 }
 
-# upsert ZONE_ID NAME TYPE CONTENT DRY_RUN
-upsert() {
-  local zid="$1" name="$2" type="$3" content="$4" dry="$5"
-  local proxied="${CF_PROXIED:-true}" existing rid cur_content cur_proxied body
-  existing="$(cf_api GET "/zones/$zid/dns_records?type=$type&name=$name")"
-  rid="$(jq -r '.result[0].id // empty' <<<"$existing")"
-  body="$(jq -nc --arg t "$type" --arg n "$name" --arg c "$content" --argjson p "$proxied" \
-    '{type:$t, name:$n, content:$c, proxied:$p, ttl:1, comment:"managed by matreko-reverse-proxy"}')"
+# sync_name ZONE_ID NAME PROXIED DRY_RUN TYPE=CONTENT...
+# 使 NAME 的 A/AAAA/CNAME 记录恰好为给定的若干条
+sync_name() {
+  local zid="$1" name="$2" proxied="$3" dry="$4"
+  shift 4
+  local existing types rec
+  existing="$(cf_api GET "/zones/$zid/dns_records?name=$name&per_page=100" |
+    jq -c '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")]')"
+  types="$(printf '%s\n' "$@" | cut -d= -f1 | jq -Rnc '[inputs]')"
 
-  if [[ -z "$rid" ]]; then
-    if [[ "$dry" == 1 ]]; then info "[dry-run] 将创建 $type $name -> $content (proxied=$proxied)"; return; fi
-    cf_api POST "/zones/$zid/dns_records" "$body" >/dev/null
-    ok "已创建 $type $name -> $content (proxied=$proxied)"
-    return
-  fi
+  # 先删除：类型不需要的记录（如切换到 Tunnel 后的 A 记录），以及同类型的多余记录
+  # CNAME 不能与 A/AAAA 共存，必须先删后建
+  jq -c --argjson t "$types" \
+    'group_by(.type) | map(if (.[0].type | IN($t[])) then .[1:] else . end) | add // [] | .[]' <<<"$existing" |
+    while read -r rec; do
+      local d
+      d="$(jq -r '"\(.type) \(.name) -> \(.content) (proxied=\(.proxied))"' <<<"$rec")"
+      if [[ "$dry" == 1 ]]; then info "[dry-run] 将删除 $d"; continue; fi
+      cf_api DELETE "/zones/$zid/dns_records/$(jq -r '.id' <<<"$rec")" >/dev/null
+      ok "已删除 $d"
+    done
 
-  cur_content="$(jq -r '.result[0].content' <<<"$existing")"
-  cur_proxied="$(jq -r '.result[0].proxied' <<<"$existing")"
-  if [[ "$cur_content" == "$content" && "$cur_proxied" == "$proxied" ]]; then
-    ok "无需变更 $type $name -> $content (proxied=$proxied)"
-    return
-  fi
-  if [[ "$dry" == 1 ]]; then
-    info "[dry-run] 将更新 $type $name：$cur_content (proxied=$cur_proxied) -> $content (proxied=$proxied)"
-    return
-  fi
-  cf_api PUT "/zones/$zid/dns_records/$rid" "$body" >/dev/null
-  ok "已更新 $type $name：$cur_content -> $content (proxied=$proxied)"
+  local item type content rid cur body
+  for item in "$@"; do
+    type="${item%%=*}" content="${item#*=}"
+    rec="$(jq -c --arg t "$type" '[.[] | select(.type == $t)][0] // empty' <<<"$existing")"
+    body="$(jq -nc --arg t "$type" --arg n "$name" --arg c "$content" --argjson p "$proxied" --arg m "$COMMENT" \
+      '{type:$t, name:$n, content:$c, proxied:$p, ttl:1, comment:$m}')"
+    if [[ -z "$rec" ]]; then
+      if [[ "$dry" == 1 ]]; then info "[dry-run] 将创建 $type $name -> $content (proxied=$proxied)"; continue; fi
+      cf_api POST "/zones/$zid/dns_records" "$body" >/dev/null
+      ok "已创建 $type $name -> $content (proxied=$proxied)"
+      continue
+    fi
+    rid="$(jq -r '.id' <<<"$rec")"
+    cur="$(jq -r '"\(.content) (proxied=\(.proxied))"' <<<"$rec")"
+    if [[ "$cur" == "$content (proxied=$proxied)" ]]; then
+      ok "无需变更 $type $name -> $cur"
+      continue
+    fi
+    if [[ "$dry" == 1 ]]; then info "[dry-run] 将更新 $type $name：$cur -> $content (proxied=$proxied)"; continue; fi
+    cf_api PUT "/zones/$zid/dns_records/$rid" "$body" >/dev/null
+    ok "已更新 $type $name：$cur -> $content (proxied=$proxied)"
+  done
 }
 
 cmd_sync() {
   local dry=0
   [[ "${1:-}" == "--dry-run" ]] && dry=1
-  [[ -n "${SERVER_IPV4:-}${SERVER_IPV6:-}" ]] || die "请在 .env 中设置 SERVER_IPV4 和/或 SERVER_IPV6"
+
+  local direct_records=() direct_proxied="${CF_PROXIED:-true}"
+  [[ "$direct_proxied" == true || "$direct_proxied" == false ]] || die "CF_PROXIED 只能是 true 或 false（当前：$direct_proxied）"
+  if [[ -n "${SERVER_IPV4:-}" ]]; then direct_records+=("A=$SERVER_IPV4"); fi
+  if [[ -n "${SERVER_IPV6:-}" ]]; then direct_records+=("AAAA=$SERVER_IPV6"); fi
+
+  # 有 Tunnel 站点时，先让 Tunnel 认识这些域名，再把 DNS 切过去，避免切换瞬间出现 404
+  local has_tunnel=0
+  if [[ -n "$(tunnel_domain_vars)" ]]; then
+    has_tunnel=1
+    [[ -n "${CF_TUNNEL_TOKEN:-}" ]] ||
+      die "$(tunnel_domain_vars | tr '\n' ' ')走 Tunnel，但 CF_TUNNEL_TOKEN 为空，请先执行 ./rpctl tunnel create"
+    tunnel_ingress_sync "$dry"
+  elif [[ -n "${CF_TUNNEL_TOKEN:-}" ]]; then
+    tunnel_ingress_sync "$dry" # 没有 Tunnel 站点了：清空路由
+  fi
 
   local zid var name
   zid="$(zone_id)"
@@ -112,8 +125,14 @@ cmd_sync() {
     name="${!var:-}"
     [[ -n "$name" ]] || { warn "$var 为空，跳过"; continue; }
     in_zone "$name" || { warn "$name 不属于 $CF_ZONE，跳过"; continue; }
-    if [[ -n "${SERVER_IPV4:-}" ]]; then upsert "$zid" "$name" A "$SERVER_IPV4" "$dry"; fi
-    if [[ -n "${SERVER_IPV6:-}" ]]; then upsert "$zid" "$name" AAAA "$SERVER_IPV6" "$dry"; fi
+    if [[ $has_tunnel == 1 ]] && is_tunnel_var "$var"; then
+      info "$name：Tunnel"
+      sync_name "$zid" "$name" true "$dry" "CNAME=$(tunnel_cname)" # Tunnel 的 CNAME 必须开启代理
+    else
+      [[ ${#direct_records[@]} -gt 0 ]] || die "$name 走公网 443，请在 .env 中设置 SERVER_IPV4 和/或 SERVER_IPV6"
+      info "$name：公网 443（proxied=$direct_proxied）"
+      sync_name "$zid" "$name" "$direct_proxied" "$dry" "${direct_records[@]}"
+    fi
   done
 }
 

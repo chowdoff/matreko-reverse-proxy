@@ -2,15 +2,18 @@
 
 统一管理反向代理及相关运维的项目：配置、脚本、文档都放在这里，用 git 做版本管理。
 
-- **对外**：对接 Cloudflare，通过 DNS-01 自动申请/续期 SSL 证书，脚本化管理 DNS 记录
+- **对外**：对接 Cloudflare，通过 DNS-01 自动申请/续期 SSL 证书，脚本化管理 DNS 记录与 Tunnel 路由。每个站点可选择公网 443（橙色云朵，默认）或 Cloudflare Tunnel 接入
 - **对内**：Caddy 统一反代到各个后台服务（Docker 容器），后台服务不直接暴露端口
 - **已接入服务**：Web SSH（[Termix](https://github.com/Termix-SSH/Termix)）
 
 ```
-浏览器 ──HTTPS──▶ Cloudflare（可选橙色云代理）──▶ 服务器 :443 Caddy ──proxy 网络──▶ termix:8080 ──SSH──▶ 目标主机
-                                                       │
-                                                       └─ 证书：Let's Encrypt DNS-01（Cloudflare API）
+               ┌─ 普通站点：──────────────── 服务器 :443 ──┐
+浏览器 ─HTTPS─▶ Cloudflare                                    Caddy ──proxy 网络──▶ 各后台服务
+               └─ Web SSH：══Tunnel══▶ cloudflared ─▶ :8443 ─┘                     （termix:8080 ──SSH──▶ 目标主机）
+                                                              └─ 证书：Let's Encrypt DNS-01（Cloudflare API）
 ```
+
+接入方式说明见 [docs/cloudflare.md](docs/cloudflare.md#2-接入方式)。
 
 ## 目录结构
 
@@ -20,7 +23,7 @@
 ├── .env.example                # 全局配置模板（复制为 .env，含密钥，不入库）
 ├── proxy/                      # Caddy 反向代理核心
 │   ├── Dockerfile              #   官方 Caddy + cloudflare DNS 插件 + cloudflare IP 插件
-│   ├── compose.yaml
+│   ├── compose.yaml            #   caddy + cloudflared（设置了 CF_TUNNEL_TOKEN 时启动）
 │   ├── Caddyfile               #   全局配置、TLS 片段、通用 header/日志
 │   └── sites/*.caddy           #   每个站点一个文件（路由表）
 ├── services/                   # 各后台服务，一个目录一个服务
@@ -29,8 +32,9 @@
 │       ├── cli.sh              #   服务命令：./rpctl webssh add-user
 │       └── README.md
 ├── scripts/
-│   ├── cf-dns.sh               # Cloudflare DNS 记录同步
-│   └── lib/common.sh           # 公共函数
+│   ├── cf-dns.sh               # Cloudflare DNS 记录与 Tunnel 路由同步
+│   ├── cf-tunnel.sh            # Cloudflare Tunnel 创建与状态
+│   └── lib/                    # 公共函数（common.sh、cf.sh）
 ├── images/                     # 预构建的 Caddy 镜像（开发机 image save，服务器 image load）
 ├── templates/service/          # 新服务模板
 └── docs/                       # 文档
@@ -57,7 +61,7 @@
 ./rpctl webssh add-user admin
 ```
 
-浏览器打开 <https://ssh.localhost>（自签证书，需手动信任）登录即可。
+浏览器打开 <https://ssh.localhost:8443>（Web SSH 是 Tunnel 站点，开发机上没有 Tunnel，从本机 8443 端口访问；自签证书，需手动信任）登录即可。
 
 ### 生产服务器部署
 
@@ -77,7 +81,8 @@
 | `./rpctl reload` | 热加载 Caddy 配置 |
 | `./rpctl ps` | 查看容器状态 |
 | `./rpctl logs <目标> [-f]` | 查看日志 |
-| `./rpctl dns verify / list / sync [--dry-run]` | Cloudflare Token 校验 / 查看 / 同步 DNS 记录 |
+| `./rpctl dns verify / list / sync [--dry-run]` | Cloudflare Token 校验 / 查看记录 / 同步 DNS 记录与 Tunnel 路由 |
+| `./rpctl tunnel create / status` | 创建 Cloudflare Tunnel / 查看 Tunnel 状态 |
 | `./rpctl backup` | 备份证书数据卷与本地配置到 `backups/` |
 | `./rpctl compose <目标> ...` | 透传任意 docker compose 命令 |
 
@@ -87,8 +92,10 @@
 
 - **密钥不入库**：`.env` 等含密钥的文件已在 `.gitignore` 中忽略，仓库里只放 `*.example*` 模板；服务数据放在 Docker 数据卷中
 - **后台服务不映射端口**：只加入外部网络 `proxy`，由 Caddy 通过容器名访问
-- **域名变量统一命名为 `XXX_DOMAIN`**：Caddy 通过 `{$XXX_DOMAIN}` 引用，`rpctl dns sync` 会自动同步所有这类变量
+- **域名变量统一命名为 `XXX_DOMAIN`**：Caddy 通过 `{$XXX_DOMAIN}` 引用，`rpctl dns sync` 会自动同步所有这类变量（DNS 记录与 Tunnel 路由）
+- **时区统一用 UTC**：Caddy、cloudflared 及各服务容器的日志都是 UTC，便于对照（北京时间加 8 小时）
 - **一个服务 = `services/<name>/` + `proxy/sites/<name>.caddy`**，详见 [docs/adding-a-service.md](docs/adding-a-service.md)
+- **接入方式写在站点文件里**：站点地址 `{$XXX_DOMAIN}` 走公网 443（默认），`{$XXX_DOMAIN}:8443` 走 Tunnel
 
 ## 文档
 

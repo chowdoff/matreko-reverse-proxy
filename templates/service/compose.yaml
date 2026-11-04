@@ -6,8 +6,8 @@ services:
     image: CHANGEME:TAG
     container_name: CHANGEME # Caddy 通过此名称访问
     restart: unless-stopped
-    # environment:
-    #   TZ: Asia/Shanghai
+    environment:
+      TZ: UTC # 所有容器统一用 UTC，与 Caddy、cloudflared 日志一致
     # volumes:
     #   - ./data:/data
     networks:

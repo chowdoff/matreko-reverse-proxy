@@ -12,18 +12,42 @@ services:
     container_name: caddy
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
-      - "${HTTPS_PORT:-443}:443/udp" # HTTP/3
+      # 公网入口（橙色云朵回源）；暂无此类站点时可在 .env 设 LISTEN_ADDR=127.0.0.1 关闭公网监听
+      - "${LISTEN_ADDR:-0.0.0.0}:${HTTP_PORT:-80}:80"
+      - "${LISTEN_ADDR:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+      - "${LISTEN_ADDR:-0.0.0.0}:${HTTPS_PORT:-443}:443/udp" # HTTP/3
+      # Tunnel 站点入口：cloudflared 经 proxy 网络访问 caddy:8443；这里只发布到本机回环，便于本地调试
+      - "127.0.0.1:${TUNNEL_LOCAL_PORT:-8443}:8443"
     # 全局 .env 注入容器：Caddyfile 中通过 {$WEBSSH_DOMAIN}、{env.CF_API_TOKEN} 等引用
     # 新增服务只需在 .env 里加 XXX_DOMAIN，无需改这里
     env_file:
       - ../.env
+    environment:
+      TZ: UTC # 所有容器统一用 UTC：cloudflared 日志固定为 UTC，无法修改
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./sites:/etc/caddy/sites:ro
       - caddy_data:/data # 证书、ACME 账户 —— 需要备份
       - caddy_config:/config
+    networks:
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+
+  # Cloudflare Tunnel 客户端：主动连到 Cloudflare，把 Tunnel 站点的请求转给 caddy:8443，无需入站端口
+  # 仅在 .env 设置了 CF_TUNNEL_TOKEN 时启动（rpctl 会设置 COMPOSE_PROFILES=tunnel）
+  # 路由（域名 → https://caddy:8443）保存在 Cloudflare 侧，由 ./rpctl dns sync 推送，修改后无需重启
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7}
+    container_name: cloudflared
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    depends_on:
+      - caddy
     networks:
       - proxy
     security_opt:

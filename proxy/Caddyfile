@@ -1,19 +1,35 @@
 # =============================================================
 # Caddy 全局配置
 #   - 每个站点一个文件，放在 sites/*.caddy，由末尾的 import 自动加载
+#   - 两种接入方式（每个站点自选，见 docs/cloudflare.md）：
+#       {$XXX_DOMAIN}       公网 443：DNS 指向服务器 IP（橙色云朵），默认
+#       {$XXX_DOMAIN}:8443  Tunnel：8443 不对公网发布，只有 cloudflared 能访问
 #   - {$VAR} 在解析时由环境变量替换（来自项目根目录 .env）
 #   - 修改后执行 ./rpctl reload 热加载，无需重启
 # =============================================================
 {
 	email {$ACME_EMAIL}
 
-	servers {
-		# 信任 Cloudflare 回源 IP 段（插件每 12 小时自动刷新），
-		# 只有来自这些 IP 的 CF-Connecting-IP 才会被当作真实客户端 IP
+	# Caddy 自身运行日志：ISO 8601 时间（UTC），与 cloudflared、Termix 一致，便于对照
+	log {
+		format json {
+			time_format iso8601
+		}
+	}
+
+	# 公网 443：请求来自 Cloudflare 回源节点，只信任 Cloudflare 的 IP 段（插件每 12 小时自动刷新），
+	# 只有来自这些 IP 的 CF-Connecting-IP 才会被当作真实客户端 IP，直连源站无法伪造
+	servers :443 {
 		trusted_proxies cloudflare {
 			interval 12h
 			timeout 15s
 		}
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+
+	# Tunnel 8443：请求都来自同一 Docker 网络中的 cloudflared，信任内网地址
+	servers :8443 {
+		trusted_proxies static private_ranges
 		client_ip_headers CF-Connecting-IP X-Forwarded-For
 	}
 }
@@ -50,7 +66,9 @@
 
 	log {
 		output stdout
-		format json
+		format json {
+			time_format iso8601
+		}
 	}
 }
 

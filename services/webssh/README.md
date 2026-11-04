@@ -45,6 +45,7 @@
 
 ## 安全说明
 
+- **接入方式：Cloudflare Tunnel**：站点只监听 Caddy 的 8443 端口（不对公网发布），公网 80/443 上不提供该域名，只能经 Tunnel 访问，见 [cloudflare.md](../../docs/cloudflare.md#2-接入方式)。仍应为所有账号开启 TOTP 两步验证
 - **注册**：公网注册被屏蔽，账号只能在服务器上创建
 - **凭据加密**：密码、私钥使用按用户的密钥加密，数据库文件本身也加密；加密密钥在数据卷中自动生成
 - **备份即密钥**：`./rpctl backup` 生成的 `rp-webssh_termix_data.tgz` 同时包含加密数据和密钥，拿到它等于拿到所有保存的服务器凭据，务必妥善保管
@@ -87,6 +88,10 @@ docker save ghcr.io/termix-ssh/termix:26.11.0 | gzip | ssh root@<服务器> 'gun
 | 现象 | 排查 |
 | --- | --- |
 | 网页注册返回 403 | 正常，用 `./rpctl webssh add-user` 创建账号 |
+| 终端每隔 1~2 分钟断线重连 | 站点被改成了走公网 443 + 橙色云朵，回源链路会静默掐断长连接；保持 `proxy/sites/webssh.caddy` 中的 `:8443`（走 Tunnel），见 [cloudflare.md](../../docs/cloudflare.md#2-接入方式) |
+| 打不开，Cloudflare 报 502 / 1033 | Tunnel 不在线：`./rpctl tunnel status`、`./rpctl logs proxy` |
+| 开发机上打不开 | 开发模式没有 Tunnel，用 `https://ssh.localhost:8443` 访问 |
+| 日志时间比北京时间慢 8 小时 | 正常，所有容器统一使用 UTC，与 Caddy、cloudflared 日志一致 |
 | 连接本机超时 | 宿主机防火墙拦截了 Docker 网段访问 22，见 [deploy.md 防火墙](../../docs/deploy.md#防火墙) |
 | root 密码登录失败 | 默认 `PermitRootLogin prohibit-password`，改用普通用户或私钥 |
 | 所有用户密码都失败 | 云镜像常设置 `PasswordAuthentication no`（见 `/etc/ssh/sshd_config.d/`），改用私钥 |

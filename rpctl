@@ -34,9 +34,11 @@ usage() {
   compose <目标> ...   透传 docker compose 命令，例如 ./rpctl compose webssh exec termix sh
 
 Cloudflare
-  dns verify           校验 CF_API_TOKEN
+  dns verify           校验 CF_API_TOKEN 权限
   dns list             列出各 *_DOMAIN 的 DNS 记录
-  dns sync [--dry-run] 把各 *_DOMAIN 指向 SERVER_IPV4/SERVER_IPV6
+  dns sync [--dry-run] 把各 *_DOMAIN 发布到 Cloudflare（Tunnel 站点：Tunnel 路由 + CNAME；其他：A/AAAA）
+  tunnel create [名称] 创建 Cloudflare Tunnel，Token 自动写入 .env
+  tunnel status        查看 Tunnel 状态、连接与路由
 
 运维
   backup               备份所有数据卷（证书、Termix 数据等）与 .env 到 backups/
@@ -76,7 +78,11 @@ cmd_init() {
   done
   ok "初始化完成"
   if [[ "${CADDY_TLS_MODE:-cloudflare}" == cloudflare ]]; then
-    info "生产模式：如尚未完成，请先执行 ./rpctl dns verify && ./rpctl dns sync（见 docs/deploy.md）"
+    if [[ -n "$(tunnel_domain_vars)" && -z "${CF_TUNNEL_TOKEN:-}" ]]; then
+      info "有站点走 Tunnel：请先执行 ./rpctl dns verify && ./rpctl tunnel create（见 docs/deploy.md）"
+    else
+      info "生产模式：如尚未完成，请先执行 ./rpctl dns verify && ./rpctl dns sync（见 docs/deploy.md）"
+    fi
   fi
   # 先准备镜像：check 需要用 Caddy 镜像校验 Caddyfile
   if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
@@ -93,6 +99,19 @@ cmd_check() {
   local failed=0 var
 
   [[ -n "${ACME_EMAIL:-}" ]] || { err "ACME_EMAIL 未设置"; failed=1; }
+  local tunnel_vars
+  tunnel_vars="$(tunnel_domain_vars | tr '\n' ' ')"
+  if [[ -n "$tunnel_vars" ]]; then
+    info "走 Tunnel 的站点：$tunnel_vars（其余走公网 443）"
+    if [[ "${CADDY_TLS_MODE:-cloudflare}" == internal ]]; then
+      warn "开发模式不启动 Tunnel，Tunnel 站点请通过 https://<域名>:${TUNNEL_LOCAL_PORT:-8443} 本地访问"
+    elif [[ -z "${CF_TUNNEL_TOKEN:-}" ]]; then
+      err "以上站点走 Tunnel，但 CF_TUNNEL_TOKEN 为空，先执行 ./rpctl tunnel create"; failed=1
+    fi
+  fi
+  if [[ -n "${CF_TUNNEL_TOKEN:-}" && "${CADDY_TLS_MODE:-cloudflare}" == internal ]]; then
+    warn "CADDY_TLS_MODE=internal 时 cloudflared 无法校验 Caddy 的自签证书，Tunnel 不可用"
+  fi
   case "${CADDY_TLS_MODE:-cloudflare}" in
     cloudflare) [[ -n "${CF_API_TOKEN:-}" ]] || { err "CADDY_TLS_MODE=cloudflare 但 CF_API_TOKEN 为空"; failed=1; } ;;
     internal) warn "CADDY_TLS_MODE=internal：使用自签证书，仅适合开发环境" ;;
@@ -108,17 +127,15 @@ cmd_check() {
   done
 
   if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
-    if docker run --rm --env-file "$ROOT/.env" \
+    local out
+    if out="$(docker run --rm --env-file "$ROOT/.env" \
       -v "$ROOT/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" \
       -v "$ROOT/proxy/sites:/etc/caddy/sites:ro" \
-      "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+      "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1)"; then
       ok "Caddyfile 校验通过"
     else
       err "Caddyfile 校验失败："
-      docker run --rm --env-file "$ROOT/.env" \
-        -v "$ROOT/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-        -v "$ROOT/proxy/sites:/etc/caddy/sites:ro" \
-        "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -5 || true
+      printf '%s\n' "$out" | tail -5 >&2
       failed=1
     fi
   else
@@ -171,6 +188,11 @@ cmd_up() {
     targets_or_all "$@" | grep -qx proxy; then
     cmd_image load
   fi
+  # 删除 CF_TUNNEL_TOKEN 后清理遗留的 cloudflared（profile 未启用时 compose 不会管它）
+  if [[ -z "${CF_TUNNEL_TOKEN:-}" ]] && docker inspect cloudflared >/dev/null 2>&1; then
+    warn "CF_TUNNEL_TOKEN 为空，移除 cloudflared 容器"
+    docker rm -f cloudflared >/dev/null
+  fi
   local t
   for t in $(targets_or_all "$@"); do
     info "启动 $t"
@@ -208,7 +230,9 @@ cmd_pull() {
   local t
   for t in $(targets_or_all "$@"); do
     if [[ "$t" == proxy ]]; then
-      info "proxy 为本地构建镜像，使用 ./rpctl build 更新"
+      info "Caddy 为本地构建镜像，使用 ./rpctl build 更新"
+      # 只拉取 cloudflared 等非本地构建的镜像
+      dc "$t" pull --ignore-buildable
       continue
     fi
     dc "$t" pull
@@ -277,6 +301,7 @@ main() {
     reload) cmd_reload ;;
     compose) [[ $# -ge 1 ]] || die "用法：./rpctl compose <目标> <compose 参数...>"; load_env; dc "$@" ;;
     dns) "$ROOT/scripts/cf-dns.sh" "$@" ;;
+    tunnel) "$ROOT/scripts/cf-tunnel.sh" "$@" ;;
     backup) cmd_backup ;;
     help | -h | --help) usage ;;
     *)

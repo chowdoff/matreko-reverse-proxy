@@ -17,7 +17,7 @@ services:
       # 注册接口已在 Caddy 层对公网屏蔽（proxy/sites/webssh.caddy），
       # 这里保持 true，供 ./rpctl webssh add-user 在容器内部创建账号
       ALLOW_REGISTRATION: "true"
-      TZ: ${TZ:-Asia/Shanghai}
+      TZ: UTC # 与 Caddy、cloudflared 日志统一用 UTC
     volumes:
       # 数据库、加密密钥、上传文件 —— 需要备份（./rpctl backup）
       - termix_data:/app/data

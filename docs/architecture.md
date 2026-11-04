@@ -3,19 +3,22 @@
 ## 总览
 
 ```
-                ┌─────────────────────── Cloudflare ───────────────────────┐
-  浏览器 ─HTTPS─▶│ DNS：*_DOMAIN → 服务器 IP（可开启橙色云代理 / WAF / 缓存）│
-                └──────────────────────────────┬────────────────────────────┘
-                                               │ HTTPS（SSL 模式 Full (strict)）
-                    ┌──────────────── 服务器 ──▼─────────────────────────────┐
-                    │  Caddy  :80 :443（tcp+udp）                             │
-                    │   ├─ 证书：ACME DNS-01（Cloudflare API Token）          │
-                    │   ├─ 信任 Cloudflare 回源 IP，取 CF-Connecting-IP       │
-                    │   └─ sites/*.caddy 按域名路由                           │
-                    │        │ Docker 网络 proxy（外部网络，各项目共享）       │
-                    │        ▼                                                │
-                    │   termix:8080     <后续服务>:port   ...                 │
-                    └────────────────────────────────────────────────────────┘
+                ┌────────────────────────── Cloudflare ──────────────────────────┐
+  浏览器 ─HTTPS─▶│ 普通站点：A/AAAA → 服务器 IP（橙色云朵）                       │
+                │ Tunnel 站点：CNAME → <Tunnel ID>.cfargotunnel.com              │
+                │             Tunnel 路由 → https://caddy:8443（SNI = 域名）     │
+                └───────────┬───────────────────────────────▲────────────────────┘
+                            │ 回源 443                       │ cloudflared 主动建立的出站长连接（7844）
+                    ┌───────▼──────────────── 服务器 ────────┴──────────────────┐
+                    │  Caddy :80 :443（公网）           cloudflared              │
+                    │        :8443（仅 Docker 网络） ◀───────┘                   │
+                    │   ├─ 证书：ACME DNS-01（Cloudflare API Token）             │
+                    │   ├─ 按端口信任上游，取 CF-Connecting-IP 作为客户端 IP     │
+                    │   └─ sites/*.caddy 按域名路由                              │
+                    │        │ Docker 网络 proxy（外部网络，各项目共享）          │
+                    │        ▼                                                   │
+                    │   termix:8080（Tunnel 站点）   <后续服务>:port   ...        │
+                    └───────────────────────────────────────────────────────────┘
 ```
 
 ## 关键设计决策
@@ -31,9 +34,23 @@
 
 Nginx Proxy Manager 的配置存放在 SQLite 中，只能在 UI 操作，不利于版本管理与脚本化，因此未采用。
 
+### 为什么用 Cloudflare Tunnel 接入
+
+| 方案 | 问题 |
+| --- | --- |
+| DNS 仅解析（灰色云朵） | 服务器 IP 公开，80/443 直接暴露在公网 |
+| 橙色云朵代理回源 443 | 实测 WebSocket 长连接（Web SSH 终端）每 1~2 分钟被静默切断；源站 IP 仍可能被扫描发现 |
+| **Tunnel** | 服务器主动连出，不开放入站端口、DNS 中没有 IP；长连接稳定 |
+
+但不是所有服务都需要 Tunnel，因此按站点选择：站点地址 `{$XXX_DOMAIN}` 走公网 443（默认），`{$XXX_DOMAIN}:8443` 走 Tunnel。
+
+- **端口隔离**：Caddy 的 8443 只在 Docker 网络内可达，Tunnel 站点不出现在公网 80/443 上，即使知道服务器 IP 也无法绕过 Cloudflare 访问
+- **Caddy 统一处理**：cloudflared 只负责把流量送到 Caddy，证书、路由、安全头仍由 Caddy 处理，切换接入方式只需改站点地址
+- **单一配置来源**：Tunnel 路由使用远程配置（保存在 Cloudflare），由 `rpctl dns sync` 根据站点文件生成并推送。新增 Tunnel 站点时不需要改 cloudflared 配置，也不需要重启
+
 ### 为什么用 DNS-01 而不是 HTTP-01
 
-- 开启 Cloudflare 代理后 HTTP-01 也能用，但 DNS-01 与 80 端口、代理开关、防火墙都无关，最稳
+- Tunnel 站点不在公网端口上提供服务，HTTP-01/TLS-ALPN-01 都无法使用；DNS-01 与端口、代理开关、防火墙都无关，最稳
 - 后续可直接签发通配符证书（`*.example.com`）
 - Token 只需对单个 Zone 的 DNS 编辑权限，泄露影响面可控
 
@@ -52,7 +69,22 @@ Nginx Proxy Manager 的配置存放在 SQLite 中，只能在 UI 操作，不利
 
 ### 真实客户端 IP
 
-开启 Cloudflare 代理时，Caddy 看到的来源是 Cloudflare 节点 IP。通过 `caddy-cloudflare-ip` 插件定期拉取 Cloudflare IP 段并设为 `trusted_proxies`，只有来自这些 IP 的 `CF-Connecting-IP` 头才会被采信，日志中的 `client_ip` 即为真实用户 IP，防止伪造。
+Cloudflare 会把真实用户 IP 写入 `CF-Connecting-IP` 头。Caddy 只采信可信上游传来的这个头，Caddyfile 中按监听端口分别配置信任范围：
+
+- **`:443`**：请求来自 Cloudflare 回源节点。`caddy-cloudflare-ip` 插件定期拉取 Cloudflare IP 段作为可信来源，直连源站的请求无法伪造
+- **`:8443`**：请求都来自同一 Docker 网络中的 cloudflared，信任内网地址（`private_ranges`）。该端口不对公网发布，公网无法伪造
+
+日志中的 `client_ip` 即为真实用户 IP。
+
+### 时区
+
+所有容器统一使用 **UTC**，排查问题时各组件的日志时间可以直接对照：
+
+- **cloudflared**：日志固定为 UTC，无法修改，因此以它为准
+- **Caddy**：日志时间格式为 ISO 8601，例如 `2026-11-03T16:32:17.611Z`
+- **各服务容器**：在 compose 中设置 `TZ: UTC`，新服务模板已包含
+
+换算成北京时间（UTC+8）时加 8 小时。`docker logs -t` 打印的时间戳也是 UTC。
 
 ## 配置流向
 
@@ -69,7 +101,7 @@ Nginx Proxy Manager 的配置存放在 SQLite 中，只能在 UI 操作，不利
 | 数据 | 位置 | 说明 |
 | --- | --- | --- |
 | 证书、ACME 账户 | 卷 `rp-proxy_caddy_data` | 丢失后会自动重新申请，但要注意 Let's Encrypt 频率限制 |
-| 全局配置与密钥 | `.env` | 不入库，需单独备份 |
+| 全局配置与密钥 | `.env` | 含 API Token、Tunnel Token；不入库，需单独备份 |
 | 服务数据 | 卷 `rp-<服务>_*` | 如 `rp-webssh_termix_data`（Termix 数据库与加密密钥） |
 
 `./rpctl backup` 会打包以上内容到 `backups/<时间戳>/`。

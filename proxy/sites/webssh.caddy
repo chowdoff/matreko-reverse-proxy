@@ -1,7 +1,10 @@
 # Web SSH（Termix）
 # 后端：services/webssh，容器名 termix，监听 8080，仅加入 proxy 网络，不对外暴露端口
 # WebSocket、大文件上传（SFTP）由 reverse_proxy 自动处理：Caddy 默认无请求体大小限制、无读超时
-{$WEBSSH_DOMAIN} {
+#
+# 接入方式：Cloudflare Tunnel（站点监听 8443，公网 80/443 上不提供该域名）
+# 终端 WebSocket 经橙色云朵回源会被周期性掐断，经 Tunnel 稳定，见 docs/cloudflare.md
+{$WEBSSH_DOMAIN}:8443 {
 	import common
 
 	# 禁止公网注册账号（Termix 中注册即建号，第一个注册者成为管理员）
@@ -12,5 +15,14 @@
 	}
 	respond @register "Registration is disabled" 403
 
-	reverse_proxy termix:8080
+	reverse_proxy termix:8080 {
+		# 配置重载时 Caddy 默认立即关闭所有 WebSocket，正在使用的终端会断线；
+		# 延迟关闭，让已有终端会话在重载后继续保持（最长 8 小时）
+		stream_close_delay 8h
+	}
+}
+
+# 公网 80 端口不为该域名做 HTTP→HTTPS 跳转，直接断开，避免暴露本机托管了该域名
+http://{$WEBSSH_DOMAIN} {
+	abort
 }

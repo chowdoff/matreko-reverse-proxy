@@ -44,12 +44,38 @@ load_env() {
   set +a
   # 供 compose 中 user: "${PUID}:${PGID}" 使用
   export PUID="${PUID:-$(id -u)}" PGID="${PGID:-$(id -g)}"
+
+  # 配置了 Tunnel Token 时启用 proxy/compose.yaml 中的 cloudflared 服务
+  if [[ -n "${CF_TUNNEL_TOKEN:-}" ]]; then export COMPOSE_PROFILES=tunnel; fi
+}
+
+# env_set KEY VALUE —— 修改 .env 中的一项（不存在则追加），保持 600 权限
+env_set() {
+  local f="$ROOT/.env" tmp
+  tmp="$(mktemp "$f.XXXXXX")"
+  if grep -q "^$1=" "$f"; then
+    awk -v k="$1" -v v="$2" 'index($0, k "=") == 1 { print k "=" v; next } { print }' "$f" >"$tmp"
+  else
+    # 原文件末尾没有换行时先补一个，避免与最后一行粘连
+    { cat "$f"; [[ -z "$(tail -c 1 "$f")" ]] || echo; printf '%s=%s\n' "$1" "$2"; } >"$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$f"
 }
 
 # 列出 .env 中所有 *_DOMAIN 变量名
 domain_vars() {
   grep -oE '^[A-Z0-9_]+_DOMAIN=' "$ROOT/.env" | tr -d '=' || true
 }
+
+# 列出走 Cloudflare Tunnel 的域名变量名：proxy/sites/*.caddy 中站点地址写成 {$XXX_DOMAIN}:8443 的
+tunnel_domain_vars() {
+  cat "$ROOT"/proxy/sites/*.caddy 2>/dev/null |
+    sed -nE 's/^\{\$([A-Z0-9_]+_DOMAIN)\}:8443([[:space:],{].*)?$/\1/p' | sort -u
+}
+
+# is_tunnel_var VAR —— 该域名变量是否走 Tunnel
+is_tunnel_var() { tunnel_domain_vars | grep -qx "$1"; }
 
 # 列出所有服务（services/ 下含 compose.yaml 的目录）
 list_services() {
