@@ -27,10 +27,17 @@ cmd_verify() {
   ok "Zone $CF_ZONE 的 ID：$zid"
   cf_api GET "/zones/$zid/dns_records?per_page=1" >/dev/null
   ok "Token 可读取 $CF_ZONE 的 DNS 记录（编辑权限会在 dns sync / 申请证书时验证）"
-  if [[ -n "${CF_TUNNEL_TOKEN:-}" || -n "$(tunnel_domain_vars)" ]]; then
-    local t
-    t="$(cf_api GET "$(tunnel_path)" | jq -r '.result | "\(.name)（状态：\(.status)）"')"
+  if [[ -n "${CF_TUNNEL_TOKEN:-}" ]]; then
+    local path t
+    path="$(tunnel_path)"
+    t="$(cf_api GET "$path" | jq -r '.result | "\(.name)（状态：\(.status)）"')"
     ok "Token 可访问 Tunnel：$t"
+  elif [[ -n "$(tunnel_domain_vars)" ]]; then
+    # 还没创建 Tunnel：检查 Token 能否列出账号下的 Tunnel（即是否有 Cloudflare Tunnel 权限）
+    local acc
+    acc="$(zone_json | jq -r '.account.id')"
+    cf_api GET "/accounts/$acc/cfd_tunnel?per_page=1&is_deleted=false" >/dev/null
+    ok "Token 有 Cloudflare Tunnel 权限（尚未创建 Tunnel，下一步：./rpctl tunnel create）"
   fi
 }
 
@@ -127,7 +134,9 @@ cmd_sync() {
     in_zone "$name" || { warn "$name 不属于 $CF_ZONE，跳过"; continue; }
     if [[ $has_tunnel == 1 ]] && is_tunnel_var "$var"; then
       info "$name：Tunnel"
-      sync_name "$zid" "$name" true "$dry" "CNAME=$(tunnel_cname)" # Tunnel 的 CNAME 必须开启代理
+      local cname
+      cname="$(tunnel_cname)"
+      sync_name "$zid" "$name" true "$dry" "CNAME=$cname" # Tunnel 的 CNAME 必须开启代理
     else
       [[ ${#direct_records[@]} -gt 0 ]] || die "$name 走公网 443，请在 .env 中设置 SERVER_IPV4 和/或 SERVER_IPV6"
       info "$name：公网 443（proxied=$direct_proxied）"

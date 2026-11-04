@@ -17,7 +17,9 @@ source "$ROOT/scripts/lib/cf.sh"
 cmd_create() {
   local name="${1:-matreko-reverse-proxy}"
   if [[ -n "${CF_TUNNEL_TOKEN:-}" ]]; then
-    warn ".env 中已有 CF_TUNNEL_TOKEN（Tunnel ID：$(tunnel_token_field t)），无需重复创建"
+    local tid
+    tid="$(tunnel_token_field t)"
+    warn ".env 中已有 CF_TUNNEL_TOKEN（Tunnel ID：$tid），无需重复创建"
     cmd_status
     return
   fi

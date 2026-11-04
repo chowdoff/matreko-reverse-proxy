@@ -65,10 +65,20 @@ tunnel_token_field() {
   printf '%s' "$v"
 }
 
-tunnel_path() { printf '/accounts/%s/cfd_tunnel/%s' "$(tunnel_token_field a)" "$(tunnel_token_field t)"; }
+# 注意：命令替换作为参数时失败不会触发 set -e，因此先赋值再使用
+tunnel_path() {
+  local a t
+  a="$(tunnel_token_field a)" || exit 1
+  t="$(tunnel_token_field t)" || exit 1
+  printf '/accounts/%s/cfd_tunnel/%s' "$a" "$t"
+}
 
 # 各域名 DNS 记录应指向的 CNAME 目标
-tunnel_cname() { printf '%s.cfargotunnel.com' "$(tunnel_token_field t)"; }
+tunnel_cname() {
+  local t
+  t="$(tunnel_token_field t)" || exit 1
+  printf '%s.cfargotunnel.com' "$t"
+}
 
 # tunnel_ingress_sync DRY_RUN —— 把 Tunnel 站点的路由推送到 Tunnel（远程配置，cloudflared 自动生效，无需重启）
 # 每个域名都转给 Caddy 的 8443，并以域名作为 TLS SNI（cloudflared 校验 Caddy 的证书）；其余请求返回 404
