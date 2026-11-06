@@ -35,7 +35,7 @@
 │   ├── cf-dns.sh               # Cloudflare DNS 记录与 Tunnel 路由同步
 │   ├── cf-tunnel.sh            # Cloudflare Tunnel 创建与状态
 │   ├── firewall-check.sh       # 在开发机上从外部检查服务器防火墙（独立脚本）
-│   ├── site.sh                 # 服务器本地站点：./rpctl site add / remove（配置只存本机）
+│   ├── site.sh                 # 站点管理：./rpctl site list / add / remove（add 的配置只存本机）
 │   └── lib/                    # 公共函数（common.sh、cf.sh）
 ├── images/                     # 预构建的 Caddy 镜像（开发机 image save，服务器 image load）
 ├── templates/service/          # 新服务模板
@@ -86,6 +86,7 @@
 | `./rpctl dns verify / list / sync [--dry-run]` | Cloudflare Token 校验 / 查看记录 / 同步 DNS 记录与 Tunnel 路由 |
 | `./rpctl tunnel create / status` | 创建 Cloudflare Tunnel / 查看 Tunnel 状态 |
 | `./rpctl backup` | 备份证书数据卷与本地配置到 `backups/` |
+| `./rpctl site list` | 列出所有站点（仓库中的和本地的）、后端及其容器状态 |
 | `./rpctl site add / remove [名称]` | 在服务器上交互式添加 / 删除公网 443 站点，配置只保存在本机，见 [新增服务](docs/adding-a-service.md) |
 | `./rpctl compose <目标> ...` | 透传任意 docker compose 命令 |
 

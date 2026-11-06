@@ -34,6 +34,7 @@ usage() {
   compose <目标> ...   透传 docker compose 命令，例如 ./rpctl compose webssh exec termix sh
 
 站点
+  site list            列出所有站点（仓库中的和本地的）、后端及其容器状态
   site add [名称]      [服务器] 交互式添加公网 443 站点并部署，配置只保存在本机，不入库
   site remove [名称]   删除 site add 添加的站点（后端容器、站点文件、域名、DNS 记录）
 

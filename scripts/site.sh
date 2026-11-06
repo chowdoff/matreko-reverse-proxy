@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 服务器本地的公网 443 站点，经由 ./rpctl site <子命令> 调用
+#   site list            列出所有站点（仓库中的和本地的）及后端状态
 #   site add [名称]      交互式添加站点，写入后可以立即部署
 #   site remove [名称]   删除 site add 添加的站点
 #
@@ -405,6 +406,38 @@ cmd_add() {
   info "本地站点不入库，./rpctl backup 会一并备份（config.tgz）。修改：编辑 proxy/sites/local/$NAME.caddy 后 ./rpctl reload"
 }
 
+# ---------- 列表 ----------
+
+# 列出所有站点：名称、来源、接入方式、后端、后端容器状态、域名
+cmd_list() {
+  local f name src var domain mode target host state n=0
+  local fmt='%-16s %-6s %-7s %-32s %-10s %s\n'
+  # shellcheck disable=SC2059
+  printf "$fmt" NAME SOURCE INGRESS BACKEND STATUS DOMAIN
+  while read -r f; do
+    n=$((n + 1))
+    name="$(basename "$f" .caddy)"
+    if [[ "$f" == "$SITE_DIR"/* ]]; then src=local; else src=repo; fi
+    var="$(site_var "$f")"
+    domain="${var:+${!var:-（.env 中没有 $var）}}"
+    if [[ -n "$var" ]] && is_tunnel_var "$var"; then mode=tunnel; else mode=443; fi
+    target="$(awk '$1 == "reverse_proxy" { print $2; exit }' "$f")"
+    # 后端是容器名（不含点）时显示容器状态；IP、域名后端不在本项目管理范围内
+    host="${target#*://}"
+    host="${host%:*}"
+    if [[ -n "$host" && "$host" != *.* && "$host" != \[* ]]; then
+      state="$(docker inspect -f '{{.State.Status}}' "$host" 2>/dev/null)" || state=missing
+    else
+      state=-
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt" "$name" "$src" "$mode" "${target:--}" "$state" "${domain:--}"
+  done < <(site_files)
+  [[ $n -gt 0 ]] || info "没有站点"
+  echo
+  info "SOURCE=local 的站点由 ./rpctl site add 添加，只保存在本机，可用 ./rpctl site remove 删除"
+}
+
 # ---------- 删除 ----------
 
 local_sites() {
@@ -541,6 +574,7 @@ cmd_remove() {
 usage() {
   cat <<EOF
 用法：./rpctl site <子命令>
+  list            列出所有站点（仓库中的和本地的）、后端及其容器状态
   add [名称]      交互式添加公网 443 站点并部署（配置只保存在本机，不入库）
   remove [名称]   删除 site add 添加的站点：后端容器、站点文件、.env 中的域名、DNS 记录
 EOF
@@ -550,13 +584,14 @@ main() {
   local cmd="${1:-}"
   [[ $# -gt 0 ]] && shift
   case "$cmd" in
-    add | remove | rm) ;;
+    list | ls | add | remove | rm) ;;
     -h | --help | help) usage; exit 0 ;;
     *) usage; exit 1 ;;
   esac
   [[ -f "$ROOT/.env" ]] || die "未找到 .env，请先完成部署（docs/deploy.md）"
   load_env
   case "$cmd" in
+    list | ls) cmd_list ;;
     add) cmd_add "$@" ;;
     remove | rm) cmd_remove "$@" ;;
   esac
