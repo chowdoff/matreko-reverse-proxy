@@ -39,7 +39,7 @@ CF_ZONE=example.com
 | WebSocket 长连接 | ⚠️ 实测每 1~2 分钟断线一次 | ✅ 稳定（实测） |
 | 适用 | 普通网页、API | Web SSH 等长连接服务，或不希望在公网端口上提供的服务 |
 
-当前只有 Web SSH 走 Tunnel，以后新增的服务默认走公网 443，见 [adding-a-service.md](adding-a-service.md#选择接入方式)。
+当前 Web SSH 和防火墙地图走 Tunnel，以后新增的服务默认走公网 443，见 [adding-a-service.md](adding-a-service.md#选择接入方式)。
 
 > **为什么 Web SSH 不走橙色云朵**：实测终端每隔 1~2 分钟被静默切断。Termix 日志出现 `WebSocket pong timeout`，Caddy 记录的连接时长都是 30 秒的倍数。
 >
@@ -85,6 +85,12 @@ Caddy 在公网 443 上只信任 [Cloudflare IP 段](https://www.cloudflare.com/
 也可以在控制台手动创建 Tunnel：**Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**，把安装命令中 `--token` 后面的值填入 `.env` 的 `CF_TUNNEL_TOKEN`，后续步骤相同。
 
 > 路由以站点文件为准：在控制台 Tunnel 的 *Public Hostname* 中手动做的修改，会在下次 `dns sync` 时被覆盖。
+
+### Cloudflare Access
+
+Tunnel 站点还可以在 Cloudflare 边缘加一层登录验证（Zero Trust → Access controls → Applications，免费套餐支持 50 个用户），没通过验证的请求到不了服务器。Access 应用在控制台手动创建，不由本项目管理。
+
+目前防火墙地图要求必须启用 Access，后端还会校验 Access 签发的 JWT，创建步骤见 [deploy.md 部署防火墙地图](deploy.md#2-创建-cloudflare-access-应用)。
 
 ### DNS 同步规则
 

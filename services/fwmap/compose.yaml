@@ -1,0 +1,46 @@
+# 防火墙地图：读取 DigitalOcean 云防火墙规则并画成拓扑图，见 README.md
+# 通过 ./rpctl up fwmap 启动，经 Tunnel + Cloudflare Access 以 https://$FWMAP_DOMAIN 访问
+name: rp-fwmap
+
+services:
+  fwmap:
+    # 程序只用 Node.js 内置模块，直接挂载源码运行，不需要构建镜像
+    image: ${FWMAP_NODE_IMAGE:-node:24.22.2-alpine}
+    container_name: fwmap
+    restart: unless-stopped
+    user: node
+    working_dir: /app
+    command: ["node", "server.js"]
+    environment:
+      PORT: "8080"
+      TZ: UTC # 与 Caddy、cloudflared 日志统一用 UTC
+      # 开发模式（internal）下没有配置 Access 也允许访问，生产模式必须配置
+      CADDY_TLS_MODE: ${CADDY_TLS_MODE:-cloudflare}
+      FWMAP_DO_TOKEN: ${FWMAP_DO_TOKEN:-}
+      FWMAP_ACCESS_TEAM: ${FWMAP_ACCESS_TEAM:-}
+      FWMAP_ACCESS_AUD: ${FWMAP_ACCESS_AUD:-}
+      FWMAP_REFRESH: ${FWMAP_REFRESH:-300}
+      FWMAP_LABELS: ${FWMAP_LABELS:-}
+      FWMAP_PORTS: ${FWMAP_PORTS:-}
+      FWMAP_PUBLIC_PORTS: ${FWMAP_PUBLIC_PORTS:-80,443}
+    volumes:
+      - ./app:/app:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - proxy
+    # 不映射端口：只能经由 Caddy 访问；只读文件系统、不保留任何权限
+    read_only: true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    name: proxy
+    external: true

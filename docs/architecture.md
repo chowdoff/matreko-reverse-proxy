@@ -17,7 +17,7 @@
                     │   └─ sites/*.caddy 按域名路由                              │
                     │        │ Docker 网络 proxy（外部网络，各项目共享）          │
                     │        ▼                                                   │
-                    │   termix:8080（Tunnel 站点）   <后续服务>:port   ...        │
+                    │   termix:8080  fwmap:8080（Tunnel 站点）  <后续服务>:port  │
                     └───────────────────────────────────────────────────────────┘
 ```
 
@@ -102,6 +102,6 @@ Cloudflare 会把真实用户 IP 写入 `CF-Connecting-IP` 头。Caddy 只采信
 | --- | --- | --- |
 | 证书、ACME 账户 | 卷 `rp-proxy_caddy_data` | 丢失后会自动重新申请，但要注意 Let's Encrypt 频率限制 |
 | 全局配置与密钥 | `.env` | 含 API Token、Tunnel Token；不入库，需单独备份 |
-| 服务数据 | 卷 `rp-<服务>_*` | 如 `rp-webssh_termix_data`（Termix 数据库与加密密钥） |
+| 服务数据 | 卷 `rp-<服务>_*` | 如 `rp-webssh_termix_data`（Termix 数据库与加密密钥）；防火墙地图没有数据卷 |
 
 `./rpctl backup` 会打包以上内容到 `backups/<时间戳>/`。

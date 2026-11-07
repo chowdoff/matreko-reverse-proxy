@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>防火墙地图</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>防火墙地图</h1>
+      <p>DigitalOcean 云防火墙 · 只读视图</p>
+      <span class="viewer" id="viewer" hidden></span>
+    </div>
+    <div class="meta">
+      <span id="counts"></span>
+      <span><span class="dot" id="sync-dot"></span><span id="sync-text">正在加载…</span></span>
+      <button class="btn" id="refresh" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>立即刷新</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+  <div class="alerts" id="alerts" hidden></div>
+
+  <nav class="toolbar">
+    <div class="seg" role="group" aria-label="视图">
+      <button type="button" data-tab="graph" aria-pressed="true">拓扑图</button>
+      <button type="button" data-tab="matrix" aria-pressed="false">规则矩阵</button>
+      <button type="button" data-tab="fw" aria-pressed="false">防火墙</button>
+    </div>
+    <div class="seg" role="group" aria-label="方向" id="dir-seg">
+      <button type="button" data-dir="in" aria-pressed="true">入站</button>
+      <button type="button" data-dir="out" aria-pressed="false">出站</button>
+    </div>
+    <span class="grow"></span>
+    <div class="zoom" id="zoom">
+      <button type="button" id="zoom-out" aria-label="缩小">−</button>
+      <span id="zoom-val">100%</span>
+      <button type="button" id="zoom-in" aria-label="放大">+</button>
+      <button type="button" class="fit" id="zoom-fit">适应窗口</button>
+    </div>
+  </nav>
+
+  <main class="layout" id="layout">
+    <section class="stage" id="stage"><div class="empty">正在从 DigitalOcean 读取数据…</div></section>
+    <aside class="detail" id="detail" aria-live="polite" hidden></aside>
+  </main>
+
+  <footer>这里只显示 DigitalOcean 云防火墙的规则。端口旁的协议名按常用端口号推断，不代表服务器上实际运行的程序。服务器上的 ufw / iptables 和 Docker 映射的端口不在 API 数据里，端口实际能否连通，请用 <code>scripts/firewall-check.sh</code> 从外部探测确认。</footer>
+</div>
+<div class="toast" id="toast" hidden></div>
+</body>
+</html>

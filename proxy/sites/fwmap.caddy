@@ -1,0 +1,16 @@
+# 防火墙地图（fwmap）
+# 后端：services/fwmap，容器名 fwmap，监听 8080，仅加入 proxy 网络，不对外暴露端口
+#
+# 接入方式：Cloudflare Tunnel（站点监听 8443，公网 80/443 上不提供该域名），并由 Cloudflare Access 做登录验证。
+# 页面上是整个网络的防火墙布局，后端还会校验 Access 签发的 JWT：没有配置 Access 时拒绝服务（开发模式除外），
+# 见 services/fwmap/README.md
+{$FWMAP_DOMAIN}:8443 {
+	import common
+
+	reverse_proxy fwmap:8080
+}
+
+# 公网 80 端口不为该域名做 HTTP→HTTPS 跳转，直接断开，避免暴露本机托管了该域名
+http://{$FWMAP_DOMAIN} {
+	abort
+}

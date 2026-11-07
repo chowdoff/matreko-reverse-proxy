@@ -4,12 +4,12 @@
 
 - **对外**：对接 Cloudflare，通过 DNS-01 自动申请/续期 SSL 证书，脚本化管理 DNS 记录与 Tunnel 路由。每个站点可选择公网 443（橙色云朵，默认）或 Cloudflare Tunnel 接入
 - **对内**：Caddy 统一反代到各个后台服务（Docker 容器），后台服务不直接暴露端口
-- **已接入服务**：Web SSH（[Termix](https://github.com/Termix-SSH/Termix)）
+- **已接入服务**：Web SSH（[Termix](https://github.com/Termix-SSH/Termix)）、防火墙地图（DigitalOcean 云防火墙规则拓扑图）
 
 ```
                ┌─ 普通站点：──────────────── 服务器 :443 ──┐
 浏览器 ─HTTPS─▶ Cloudflare                                    Caddy ──proxy 网络──▶ 各后台服务
-               └─ Web SSH：══Tunnel══▶ cloudflared ─▶ :8443 ─┘                     （termix:8080 ──SSH──▶ 目标主机）
+               └─ Tunnel 站点：══════▶ cloudflared ─▶ :8443 ─┘                     （termix:8080 ──SSH──▶ 目标主机）
                                                               └─ 证书：Let's Encrypt DNS-01（Cloudflare API）
 ```
 
@@ -27,10 +27,11 @@
 │   ├── Caddyfile               #   全局配置、TLS 片段、通用 header/日志
 │   └── sites/*.caddy           #   每个站点一个文件（路由表）；sites/local/ 为服务器本地站点，不入库
 ├── services/                   # 各后台服务，一个目录一个服务
-│   └── webssh/
-│       ├── compose.yaml
-│       ├── cli.sh              #   服务命令：./rpctl webssh add-user
-│       └── README.md
+│   ├── webssh/
+│   │   ├── compose.yaml
+│   │   ├── cli.sh              #   服务命令：./rpctl webssh add-user
+│   │   └── README.md
+│   └── fwmap/                  #   防火墙地图：app/ 为 Node.js 程序（无依赖），cli.sh 提供 ./rpctl fwmap check
 ├── scripts/
 │   ├── cf-dns.sh               # Cloudflare DNS 记录与 Tunnel 路由同步
 │   ├── cf-tunnel.sh            # Cloudflare Tunnel 创建与状态
@@ -51,6 +52,8 @@
 # 编辑 .env：
 #   CADDY_TLS_MODE=internal
 #   WEBSSH_DOMAIN=ssh.localhost
+#   FWMAP_DOMAIN=fw.localhost
+#   FWMAP_DO_TOKEN=...           # 可选：DigitalOcean 只读 Token，不填时防火墙地图只显示提示
 ./rpctl init                    # 创建 proxy 网络等
 ./rpctl image load              # 导入仓库中预构建的 Caddy 镜像（或 ./rpctl build 自行构建）
 ./rpctl check
@@ -63,7 +66,7 @@
 ./rpctl webssh add-user admin
 ```
 
-浏览器打开 <https://ssh.localhost:8443>（Web SSH 是 Tunnel 站点，开发机上没有 Tunnel，从本机 8443 端口访问；自签证书，需手动信任）登录即可。
+浏览器打开 <https://ssh.localhost:8443>（Web SSH 是 Tunnel 站点，开发机上没有 Tunnel，从本机 8443 端口访问；自签证书，需手动信任）登录即可。防火墙地图在 <https://fw.localhost:8443>。
 
 ### 生产服务器部署
 
@@ -90,7 +93,7 @@
 | `./rpctl site add / remove [名称]` | 在服务器上交互式添加 / 删除公网 443 站点，配置只保存在本机，见 [新增服务](docs/adding-a-service.md) |
 | `./rpctl compose <目标> ...` | 透传任意 docker compose 命令 |
 
-目标为 `proxy` 或 `services/` 下的目录名（如 `webssh`）。
+目标为 `proxy` 或 `services/` 下的目录名（如 `webssh`、`fwmap`）。
 
 ## 约定
 
@@ -108,3 +111,4 @@
 - [服务器部署](docs/deploy.md)
 - [新增服务](docs/adding-a-service.md)
 - [Web SSH 服务](services/webssh/README.md)
+- [防火墙地图](services/fwmap/README.md)

@@ -38,7 +38,10 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 ./rpctl dns sync --dry-run   # 预览
 ./rpctl dns sync        # 推送 Tunnel 路由，并创建各域名的 DNS 记录
 ./rpctl webssh add-user admin   # 创建 Web SSH 管理员账号（公网注册已屏蔽）
+./rpctl fwmap check     # 检查防火墙地图的 DigitalOcean Token 和 Cloudflare Access 配置
 ```
+
+防火墙地图需要先创建 DigitalOcean 只读 Token 和 Cloudflare Access 应用，并在 `.env` 中填写 `FWMAP_*` 变量，见 [部署防火墙地图](#部署防火墙地图) 第 1~3 步。
 
 哪些站点走 Tunnel 由站点文件决定，见 [cloudflare.md](cloudflare.md#2-接入方式)。
 
@@ -80,6 +83,108 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 
 4. **（可选）关闭入站端口**：目前还没有走公网 443 的站点，可以在 `.env` 中设置 `LISTEN_ADDR=127.0.0.1`，执行 `./rpctl up proxy`，并在云厂商安全组关闭 80/443；以后新增公网站点时再打开
 5. **（可选）处理已暴露的 IP**：服务器 IP 以前出现在 ssh 域名的 DNS 中，可能已被 DNS 历史记录网站收录。Web SSH 在公网端口上已不可访问，风险不大；如果要彻底消除，可以更换服务器公网 IP（在云厂商重新分配，或换一个弹性 IP），此操作不影响 Tunnel。更换后记得更新 `.env` 中的 `SERVER_IPV4`
+
+## 部署防火墙地图
+
+防火墙地图（`services/fwmap`）读取 DigitalOcean 云防火墙规则并画成拓扑图，走 Tunnel，并由 Cloudflare Access 做登录验证。以下步骤适用于**已经部署、Tunnel 已在使用**的服务器（`.env` 中有 `CF_TUNNEL_TOKEN`）。服务说明见 [fwmap README](../services/fwmap/README.md)。
+
+### 1. 创建 DigitalOcean 只读 Token
+
+DigitalOcean 控制台 → **API** → **Tokens** → **Generate New Token**：
+
+- **Token name**：`fwmap`
+- **Expiration**：按需选择；到期后页面会提示同步失败，届时重新生成
+- **Scopes**：选 **Custom Scopes**，只勾选 `droplet`、`firewall`、`vpc` 三项的 **read**。控制台可能会自动带上依赖的只读权限，保持即可
+
+复制生成的 Token（以 `dop_v1_` 开头，只显示一次）。
+
+### 2. 创建 Cloudflare Access 应用
+
+Cloudflare 控制台 → **Zero Trust**（首次进入需要选择免费套餐并设置团队名称）。下面的菜单名称以 2026 年 11 月的 Cloudflare 文档为准，控制台改版后可能略有不同。
+
+**先添加登录方式 One-time PIN**（邮箱收验证码）。登录方式不在应用里设置，而是在 Zero Trust 全局添加，应用再从中选择。新建的 Zero Trust 组织默认只有「Cloudflare」登录方式（用 Cloudflare 账号登录），不再自动添加 One-time PIN：
+
+1. **Integrations → Identity providers**
+2. 在 **Your identity providers** 下点 **Add new identity provider**，选 **One-time PIN**，保存（不需要填写任何配置）
+
+**再创建应用**：
+
+1. **Access controls → Applications → Create new application → Self-hosted and private**
+2. 应用名称填 `防火墙地图`，**Add public hostname** 填防火墙地图的域名（如 `fw.example.com`，即下一步的 `FWMAP_DOMAIN`）
+3. 访问策略（**Access policies**）：新建一条，Action 选 **Allow**，Include 选 **Emails**，填你自己的邮箱。Access 应用默认拒绝，只有这条策略匹配的邮箱能登录
+4. 登录方式（**Configure how users will authenticate**）：只勾选 **One-time PIN**；可以打开 **Apply instant authentication**，跳过选择登录方式的页面，直接进入填邮箱的页面
+5. 保存应用。AUD Tag 在创建流程中看不到，要回到应用列表（**Access controls → Applications**），点该应用的 **Edit**，在 **Additional settings** 中复制 **Application Audience (AUD) Tag**（一串 64 位十六进制字符）。只要不删除、重建应用，AUD Tag 就不会变
+6. 团队域名在 **Settings → Team name and domain** 中，格式为 `<团队名>.cloudflareaccess.com`。`FWMAP_ACCESS_TEAM` 也可以只填团队名，会自动补全
+
+Access 应用要在切换 DNS（第 5 步）之前创建好。即使漏了这一步，服务端在没有 Access 凭证时也会拒绝所有请求，页面内容不会泄露。
+
+登录时的注意事项：
+
+- 不在策略中的邮箱也会显示「A code has been emailed to you」，但实际收不到验证码。输错验证码或邮箱不在策略中时，会提示「That account does not have access.」
+- 验证码 10 分钟内有效，只能用一次，重新请求后旧的验证码失效
+- 如果提示「This One-Time PIN has already been used」，多半是邮箱的安全扫描先点开了邮件里的链接，点 **Request new code** 重新获取
+- 收不到邮件时，检查垃圾箱，发件人是 `noreply@notify.cloudflare.com`
+
+### 3. 更新代码并写入配置
+
+```bash
+cd /opt/matreko-reverse-proxy
+git pull
+vim .env
+```
+
+在 `.env` 中添加（可参考 `.env.example` 中「防火墙地图」一节）：
+
+```ini
+FWMAP_DOMAIN=fw.example.com
+FWMAP_DO_TOKEN=dop_v1_xxxxxxxx
+FWMAP_ACCESS_TEAM=<团队名>.cloudflareaccess.com
+FWMAP_ACCESS_AUD=<AUD Tag>
+```
+
+然后检查：
+
+```bash
+./rpctl check           # 应显示「走 Tunnel 的站点：FWMAP_DOMAIN WEBSSH_DOMAIN」
+./rpctl fwmap check     # Token 能读取 droplets / firewalls / vpcs，Access 团队域名可用
+                        # 此时容器还没启动，「fwmap 没有运行」的提示可以忽略
+```
+
+`fwmap check` 提示 Token 「可能是 Full Access Token」时，回到第 1 步换成自定义权限的 Token。
+
+### 4. 启动
+
+新增 `FWMAP_DOMAIN` 后 Caddy 容器要重建才能读到这个变量，重建时 **Web SSH 会断开一次**。如果正在用 Web SSH 操作，在独立会话中执行，断线后重连再看日志：
+
+```bash
+setsid nohup ./rpctl up >/tmp/rpctl-up.log 2>&1 </dev/null &
+tail -f /tmp/rpctl-up.log     # 最后出现「Caddy 配置已热加载」即完成，Ctrl+C 退出
+```
+
+用普通 SSH 登录的话，直接 `./rpctl up` 即可。完成后确认：
+
+```bash
+./rpctl ps              # fwmap 状态为 healthy，caddy、cloudflared 为 Up
+./rpctl fwmap check     # 全部通过，并显示最近一次「同步完成：N 台服务器……」
+```
+
+### 5. 发布域名
+
+```bash
+./rpctl dns sync --dry-run    # 应显示「将更新 Tunnel 路由为：」（列表中多了 fw.example.com），
+                              # 以及「将创建 CNAME fw.example.com -> <Tunnel ID>.cfargotunnel.com」
+./rpctl dns sync
+```
+
+### 6. 验证
+
+- 浏览器打开 `https://fw.example.com`：先跳转到 Cloudflare Access 登录页，输入邮箱、填写收到的验证码后进入拓扑图
+- 用不在策略里的邮箱登录，应被 Access 拒绝
+- 在开发机上执行 `curl -sI https://fw.example.com`，应返回 302，跳转到 `<团队名>.cloudflareaccess.com`
+
+之后可以在 `.env` 中用 `FWMAP_LABELS` 给图上的网段起名（如办公室 IP），用 `FWMAP_PORTS` 给自定义端口起名，修改后 `./rpctl up fwmap` 生效，见 [fwmap README](../services/fwmap/README.md#可选配置)。
+
+> **暂时不想部署**：`git pull` 之后 `./rpctl up` 会因为 `FWMAP_DOMAIN` 没有设置而停止。可以先只在 `.env` 中设置 `FWMAP_DOMAIN`，其余留空。服务会启动，但没有配置 Access，对所有请求返回 503，不显示任何内容。注意之后任何一次 `dns sync`（包括 `site add` 中的）都会把这个域名一并发布，访问时同样只会看到 503。
 
 ## 防火墙
 
@@ -211,6 +316,8 @@ git pull
                       # （仅改了 Caddyfile / sites 时也可只执行 ./rpctl reload）
 ```
 
+首次拉取到防火墙地图（`services/fwmap`）时，`./rpctl up` 会提示 `FWMAP_DOMAIN` 没有设置，按 [部署防火墙地图](#部署防火墙地图) 操作。
+
 新增 / 删除公网 443 站点：在服务器上执行 `./rpctl site add` / `./rpctl site remove`，配置只保存在本机，见 [adding-a-service.md](adding-a-service.md#快速方式在服务器上-rpctl-site-add)。
 
 升级 Caddy（修改 `proxy/Dockerfile` 中的 `CADDY_VERSION`）：
@@ -229,6 +336,8 @@ git pull && ./rpctl image load && ./rpctl up proxy
 ```bash
 ./rpctl pull webssh && ./rpctl up webssh
 ```
+
+防火墙地图使用官方 Node.js 镜像，版本写在 `services/fwmap/compose.yaml` 中，升级时修改版本号后 `./rpctl pull fwmap && ./rpctl up fwmap`。
 
 升级 cloudflared：修改 `proxy/compose.yaml` 中的版本号（或在 `.env` 中设置 `CLOUDFLARED_IMAGE` 覆盖），然后执行 `./rpctl pull proxy && ./rpctl up proxy`。
 
@@ -258,3 +367,4 @@ docker run --rm -v rp-proxy_caddy_data:/data -v $PWD/backups/<时间戳>:/backup
 | 502 Bad Gateway | 后端容器未运行或未加入 `proxy` 网络：`./rpctl ps` |
 | Web SSH 注册返回 403 | 正常，账号用 `./rpctl webssh add-user` 在服务器上创建，见 [webssh README](../services/webssh/README.md) |
 | Web SSH 连不上本机 | 宿主机防火墙拦截 Docker 网段到 22 端口，见上文 |
+| 防火墙地图拒绝访问 / 同步失败 | `./rpctl fwmap check`，见 [fwmap README](../services/fwmap/README.md#故障排查) |
