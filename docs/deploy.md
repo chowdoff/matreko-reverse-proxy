@@ -49,10 +49,10 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
 
 自定义 Caddy 镜像需要编译 Go 代码，在国内服务器上拉取基础镜像和 Go 依赖可能要半小时以上。因此镜像在**开发机上构建**，导出为 `images/caddy-cloudflare.tar.gz`（约 40MB）随仓库分发，服务器 `git pull` 后导入即可：
 
-| 文件 | 说明 |
-| --- | --- |
-| `images/caddy-cloudflare.tar.gz` | `docker save` 导出的镜像（linux/amd64） |
-| `images/caddy-cloudflare.info` | Caddy 版本、插件版本、构建时间、sha256，`image load` 时会校验 |
+| 文件                               | 说明                                                            |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `images/caddy-cloudflare.tar.gz` | `docker save` 导出的镜像（linux/amd64）                       |
+| `images/caddy-cloudflare.info`   | Caddy 版本、插件版本、构建时间、sha256，`image load` 时会校验 |
 
 - 服务器上 `./rpctl up` 发现本地没有镜像时，会自动执行 `image load`
 - 仓库只保留最新一份镜像文件，但每次更新都会在 git 历史中增加约 40MB，只在升级 Caddy / 插件时更新
@@ -80,7 +80,6 @@ vim .env            # 填写 ACME_EMAIL、CF_API_TOKEN、CF_ZONE、SERVER_IPV4�
    ```
 
    执行 `up` 到 `dns sync` 之间，旧的 A 记录已无法访问 Web SSH，属于正常现象。
-
 4. **（可选）关闭入站端口**：目前还没有走公网 443 的站点，可以在 `.env` 中设置 `LISTEN_ADDR=127.0.0.1`，执行 `./rpctl up proxy`，并在云厂商安全组关闭 80/443；以后新增公网站点时再打开
 5. **（可选）处理已暴露的 IP**：服务器 IP 以前出现在 ssh 域名的 DNS 中，可能已被 DNS 历史记录网站收录。Web SSH 在公网端口上已不可访问，风险不大；如果要彻底消除，可以更换服务器公网 IP（在云厂商重新分配，或换一个弹性 IP），此操作不影响 Tunnel。更换后记得更新 `.env` 中的 `SERVER_IPV4`
 
@@ -206,6 +205,7 @@ tail -f /tmp/rpctl-up.log     # 最后出现「Caddy 配置已热加载」即完
 - **有状态**：出站连接的回包自动放行
 - **默认拒绝**：只放行规则里列出的流量，入站、出站都是如此
 - **也作用于 VPC 内网流量**：DigitalOcean 的云防火墙不是只拦公网，VPC 内网流量同样要规则放行。本项目的内部通信都在本机 Docker 网络内，不经过云防火墙，所以不需要 VPC 规则：
+
   - cloudflared → Caddy → 各服务
   - Termix → 宿主机 sshd
 
@@ -213,9 +213,9 @@ tail -f /tmp/rpctl-up.log     # 最后出现「Caddy 配置已热加载」即完
 
 **入站规则**（只有这一条）：
 
-| Type | Protocol | Port | Sources | 用途 |
-| --- | --- | --- | --- | --- |
-| HTTPS | TCP | 443 | All IPv4、All IPv6 | 公网 443 站点 |
+| Type  | Protocol | Port | Sources            | 用途          |
+| ----- | -------- | ---- | ------------------ | ------------- |
+| HTTPS | TCP      | 443  | All IPv4、All IPv6 | 公网 443 站点 |
 
 还没有公网 443 站点时，Caddy 不会在 443 上监听，外部连接会被立即拒绝，属于正常现象。规则可以先留着，以后加站点时不用再改。
 
@@ -359,12 +359,12 @@ docker run --rm -v rp-proxy_caddy_data:/data -v $PWD/backups/<时间戳>:/backup
 
 ## 故障排查
 
-| 现象 | 排查 |
-| --- | --- |
-| 证书申请失败 | `./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题) |
-| Tunnel 不在线 / 502 / Error 1033 | `./rpctl tunnel status`、`./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题) |
-| 公网 443 站点 522 / 超时 | 在开发机上运行 `scripts/firewall-check.sh <服务器 IP>`；若 443 只对 Cloudflare 开放，检查 IP 段是否已过期，见上文 |
-| 502 Bad Gateway | 后端容器未运行或未加入 `proxy` 网络：`./rpctl ps` |
-| Web SSH 注册返回 403 | 正常，账号用 `./rpctl webssh add-user` 在服务器上创建，见 [webssh README](../services/webssh/README.md) |
-| Web SSH 连不上本机 | 宿主机防火墙拦截 Docker 网段到 22 端口，见上文 |
-| 防火墙地图拒绝访问 / 同步失败 | `./rpctl fwmap check`，见 [fwmap README](../services/fwmap/README.md#故障排查) |
+| 现象                             | 排查                                                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 证书申请失败                     | `./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题)                                        |
+| Tunnel 不在线 / 502 / Error 1033 | `./rpctl tunnel status`、`./rpctl logs proxy`，参见 [cloudflare.md 常见问题](cloudflare.md#常见问题)             |
+| 公网 443 站点 522 / 超时         | 在开发机上运行 `scripts/firewall-check.sh <服务器 IP>`；若 443 只对 Cloudflare 开放，检查 IP 段是否已过期，见上文 |
+| 502 Bad Gateway                  | 后端容器未运行或未加入 `proxy` 网络：`./rpctl ps`                                                               |
+| Web SSH 注册返回 403             | 正常，账号用 `./rpctl webssh add-user` 在服务器上创建，见 [webssh README](../services/webssh/README.md)            |
+| Web SSH 连不上本机               | 宿主机防火墙拦截 Docker 网段到 22 端口，见上文                                                                      |
+| 防火墙地图拒绝访问 / 同步失败    | `./rpctl fwmap check`，见 [fwmap README](../services/fwmap/README.md#故障排查)                                     |
