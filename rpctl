@@ -219,8 +219,24 @@ cmd_up() {
   # Caddyfile / sites 是挂载进容器的文件，内容变化不会让 compose 重建容器，
   # Caddy 会继续使用内存中的旧配置（例如仍指向已删除的后端导致 502），因此每次 up 后热加载一次
   if [[ "$(docker inspect -f '{{.State.Running}}' caddy 2>/dev/null)" == true ]]; then
-    cmd_reload
+    wait_caddy_admin && cmd_reload
   fi
+}
+
+# Caddy 刚被重建时管理接口（127.0.0.1:2019）要过一会儿才监听，立即热加载会被拒绝连接
+wait_caddy_admin() {
+  local i
+  for ((i = 0; i < 30; i++)); do
+    docker exec caddy wget -q -O /dev/null http://127.0.0.1:2019/config/ 2>/dev/null && return 0
+    if [[ "$(docker inspect -f '{{.State.Running}}' caddy 2>/dev/null)" != true ]]; then
+      err "Caddy 启动失败，最近日志："
+      docker logs --tail 20 caddy >&2 2>&1 || true
+      return 1
+    fi
+    sleep 1
+  done
+  err "等待 Caddy 管理接口超时（30 秒），查看 ./rpctl logs proxy"
+  return 1
 }
 
 cmd_down() {

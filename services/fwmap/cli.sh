@@ -53,7 +53,7 @@ check_access() {
 check_container() {
   local st
   st="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' fwmap 2>/dev/null)" || {
-    warn "容器：fwmap 没有运行，执行 ./rpctl up fwmap"
+    warn "容器：fwmap 没有运行，执行 ./rpctl up（首次部署需要重建 Caddy 才能读到 FWMAP_DOMAIN，Web SSH 会断开一次，见 docs/deploy.md 部署防火墙地图第 4 步）"
     return 0
   }
   case "$st" in
